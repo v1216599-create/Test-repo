@@ -2,8 +2,8 @@ name: Multi-Subscription AKS Health Check
 
 on:
   schedule:
-    - cron: "0 3 * * *"      # Daily 03:00 UTC (08:30 AM IST)
-  workflow_dispatch:          # Allow manual trigger
+    - cron: "0 3 * * *"      # Daily 8:30 AM IST
+  workflow_dispatch:          # Manual trigger
 
 jobs:
   aks-health:
@@ -30,13 +30,12 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y jq
 
-      - name: Make script executable
-        run: chmod +x aks_health_all_subs.sh
+      - name: Run AKS Multi-Subscription Health Scan
+        run: |
+          chmod +x scripts/aks_health_all_subs.sh
+          ./scripts/aks_health_all_subs.sh
 
-      - name: Run Multi-Subscription AKS Health Scan
-        run: ./aks_health_all_subs.sh
-
-      - name: Upload AKS Health Reports
+      - name: Upload HTML Reports
         uses: actions/upload-artifact@v4
         with:
           name: aks-health-reports
