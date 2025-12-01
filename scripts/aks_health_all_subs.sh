@@ -4,306 +4,264 @@ set -e
 REPORT_DIR="reports"
 mkdir -p $REPORT_DIR
 
-############################################
-# MASTER INDEX HTML (Dashboard)
-############################################
-INDEX_FILE="$REPORT_DIR/index.html"
+MASTER="$REPORT_DIR/index.html"
 
-echo "<html>
+############################################
+# BEAUTIFUL HTML TEMPLATE
+############################################
+HTML_HEADER='
+<html>
 <head>
 <title>AKS Health Dashboard</title>
+
 <style>
-body { font-family: Arial, sans-serif; margin: 20px; }
-h1 { color:#2c3e50; }
-h2 { color:#34495e; }
+
+body {
+  font-family: Arial, sans-serif;
+  margin: 20px;
+  background: #eef2f7;
+}
+
+h1 {
+  color: #2c3e50;
+  margin-bottom: 10px;
+}
+
+.card {
+  background: white;
+  padding: 20px;
+  margin-bottom: 25px;
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+}
 
 table {
-    width: 100%; 
-    border-collapse: collapse; 
-    margin-bottom: 20px;
-    font-size: 15px;
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 15px;
+  border-radius: 12px;
+  overflow: hidden;
+  font-size: 15px;
 }
-th, td {
-    padding: 10px;
-    border: 1px solid #ccc;
-}
+
 th {
-    background: #f4f4f4;
+  background: #2c3e50;
+  color: white;
+  padding: 12px;
+  text-align: left;
 }
-.ok { background:#d4edda; color:#155724; }
-.warn { background:#fff3cd; color:#856404; }
-.bad { background:#f8d7da; color:#721c24; }
+
+td {
+  padding: 10px;
+  border-bottom: 1px solid #e8e8e8;
+}
+
+.ok {
+  background:#d4edda !important;
+  color:#155724 !important;
+}
+
+.warn {
+  background:#fff3cd !important;
+  color:#856404 !important;
+}
+
+.bad {
+  background:#f8d7da !important;
+  color:#721c24 !important;
+}
 
 .collapsible {
-    background-color: #f1f1f1;
-    cursor: pointer;
-    padding: 12px;
-    width: 100%;
-    border: none;
-    text-align: left;
-    outline: none;
-    font-size: 16px;
+  background-color: #3498db;
+  color: white;
+  cursor: pointer;
+  padding: 12px;
+  width: 100%;
+  border: none;
+  outline: none;
+  font-size: 16px;
+  border-radius: 6px;
+  margin-top: 12px;
+  text-align:left;
 }
 
-.active, .collapsible:hover {
-    background-color: #ddd;
+.collapsible:hover {
+  background-color: #2980b9;
 }
 
 .content {
-    padding: 10px;
-    display: none;
-    border: 1px solid #ccc;
-    margin-bottom: 15px;
-    background:#fafafa;
+  padding: 12px;
+  display: none;
+  border-radius: 6px;
+  border: 1px solid #dcdcdc;
+  background: #fafafa;
 }
 
 pre {
-    background:#f7f7f7;
-    padding: 10px;
-    border: 1px solid #ddd;
-    overflow-x:auto;
+  background:#2d3436;
+  color:#dfe6e9;
+  padding:10px;
+  border-radius: 6px;
+  overflow-x:auto;
 }
+
 </style>
 
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-    var coll = document.getElementsByClassName('collapsible');
-    for (let i = 0; i < coll.length; i++) {
-        coll[i].addEventListener('click', function() {
-            this.classList.toggle('active');
-            var content = this.nextElementSibling;
-            content.style.display = content.style.display === 'block' ? 'none' : 'block';
-        });
-    }
+document.addEventListener("DOMContentLoaded", () => {
+  var coll = document.getElementsByClassName("collapsible");
+  for (let i=0;i<coll.length;i++){
+    coll[i].addEventListener("click", function(){
+      this.classList.toggle("active");
+      var content = this.nextElementSibling;
+      content.style.display = content.style.display === "block" ? "none":"block";
+    });
+  }
 });
 </script>
 
 </head>
 <body>
-<h1>AKS Health Dashboard</h1>
-<table>
-<tr><th>Subscription</th><th>Cluster</th><th>Status</th><th>Report</th></tr>
-" > $INDEX_FILE
-
+'
 
 ############################################
-# FETCH ALL SUBSCRIPTIONS
+# MASTER INDEX START
 ############################################
-echo "[INFO] Fetching all subscriptions..."
+echo "$HTML_HEADER" > "$MASTER"
+echo "<div class='card'><h1>AKS Health Dashboard</h1>" >> "$MASTER"
+
+echo "<table>
+<tr>
+<th>Subscription</th>
+<th>Cluster</th>
+<th>Status</th>
+<th>Report</th>
+</tr>" >> "$MASTER"
+
+############################################
+# GET ALL SUBSCRIPTIONS
+############################################
 SUBS=$(az account list --query "[].id" -o tsv)
 
-
-############################################
-# LOOP OVER SUBSCRIPTIONS
-############################################
 for SUB in $SUBS; do
 
     az account set --subscription "$SUB"
+
     CLUSTERS=$(az aks list --query "[].{name:name, rg:resourceGroup}" -o json)
 
-    if [[ $(echo $CLUSTERS | jq length) -eq 0 ]]; then 
-        continue 
-    fi
+    if [[ $(echo $CLUSTERS | jq length) -eq 0 ]]; then continue; fi
 
-    for row in $(echo "${CLUSTERS}" | jq -r '.[] | @base64'); do
-        
-        # JSON decode helper
-        _jq() { echo "${row}" | base64 --decode | jq -r "${1}"; }
+    for row in $(echo "$CLUSTERS" | jq -r '.[] | @base64'); do
 
-        CLUSTER_NAME=$(_jq '.name')
-        CLUSTER_RG=$(_jq '.rg')
+        _jq() { echo "$row" | base64 --decode | jq -r "$1"; }
 
-        echo "[INFO] Processing cluster: $CLUSTER_NAME ($SUB)"
+        CLUSTER=$(_jq '.name')
+        RG=$(_jq '.rg')
 
-        az aks get-credentials -g "$CLUSTER_RG" -n "$CLUSTER_NAME" --overwrite-existing
+        az aks get-credentials -g "$RG" -n "$CLUSTER" --overwrite-existing >/dev/null
 
+        REPORT_FILE="${SUB}_${CLUSTER}.html"
+        REPORT="$REPORT_DIR/$REPORT_FILE"
 
-        ############################################
+        #######################################
         # HEALTH CHECKS
-        ############################################
+        #######################################
 
-        NODE_NOT_READY=$(kubectl get nodes --no-headers | awk '$2!="Ready"{print $1}')
-        CRASH_PODS=$(kubectl get pods --all-namespaces | grep -i crashloop || true)
-        VERSION_INFO=$(az aks get-upgrades -g "$CLUSTER_RG" -n "$CLUSTER_NAME" --query controlPlaneProfile.upgrades[].kubernetesVersion -o tsv)
-        PVC_FAILED=$(kubectl get pvc --all-namespaces 2>/dev/null | grep -i failed || true)
-        INGRESS_COUNT=$(kubectl get ingress --all-namespaces --no-headers 2>/dev/null | wc -l)
-        HPA_COUNT=$(kubectl get hpa --all-namespaces --no-headers 2>/dev/null | wc -l)
-        PDB_COUNT=$(kubectl get pdb --all-namespaces --no-headers 2>/dev/null | wc -l)
+        NODE_NOT_READY=$(kubectl get nodes --no-headers | awk '$2!="Ready"{print}')
+        CRASH=$(kubectl get pods --all-namespaces | grep -i crashloop || true)
+        PVC_FAIL=$(kubectl get pvc --all-namespaces | grep -i failed || true)
+        UPGRADE=$(az aks get-upgrades -g "$RG" -n "$CLUSTER" --query controlPlaneProfile.upgrades[].kubernetesVersion -o tsv)
 
-        METRICS_WORKING=false
-        if kubectl top nodes &>/dev/null; then METRICS_WORKING=true; fi
+        METRICS=false
+        kubectl top nodes &>/dev/null && METRICS=true
 
+        INGRESS=$(kubectl get ingress --all-namespaces --no-headers 2>/dev/null | wc -l)
+        HPA=$(kubectl get hpa --all-namespaces --no-headers 2>/dev/null | wc -l)
+        PDB=$(kubectl get pdb --all-namespaces --no-headers 2>/dev/null | wc -l)
 
-        ############################################
-        # STATUS CLASSIFICATION
-        ############################################
+        # Color classification
+        [[ -z "$NODE_NOT_READY" ]] && NODE_CLASS="ok" && NODE_STATUS="✓ Healthy" || NODE_CLASS="bad" && NODE_STATUS="✗ Node Issue"
+        [[ -z "$CRASH" ]] && POD_CLASS="ok" && POD_STATUS="✓ Healthy" || POD_CLASS="bad" && POD_STATUS="✗ CrashLoop Detected"
+        [[ -z "$PVC_FAIL" ]] && PVC_CLASS="ok" && PVC_STATUS="✓ Healthy" || PVC_CLASS="bad" && PVC_STATUS="✗ PVC Error"
 
-        # Node check
-        if [[ -z "$NODE_NOT_READY" ]]; then NODE_STATUS="✓ Healthy"; NODE_CLASS="ok";
-        else NODE_STATUS="✗ Unhealthy"; NODE_CLASS="bad"; fi
+        [[ -n "$UPGRADE" ]] && UPGRADE_CLASS="warn" && UPGRADE_STATUS="⚠ Upgrade Available" || UPGRADE_CLASS="ok" && UPGRADE_STATUS="✓ Latest"
 
-        # Pod check
-        if [[ -z "$CRASH_PODS" ]]; then POD_STATUS="✓ Healthy"; POD_CLASS="ok";
-        else POD_STATUS="✗ CrashLoop Detected"; POD_CLASS="bad"; fi
+        $METRICS && MET_CLASS="ok" && MET_STATUS="✓ Installed" || MET_CLASS="warn" && MET_STATUS="⚠ Missing"
 
-        # Upgrade check
-        if [[ -n "$VERSION_INFO" ]]; then UPGRADE_STATUS="⚠ Upgrade Available"; UPGRADE_CLASS="warn";
-        else UPGRADE_STATUS="✓ Up-to-date"; UPGRADE_CLASS="ok"; fi
+        [[ $INGRESS -gt 0 ]] && ING_CLASS="ok" && ING_STATUS="✓ $INGRESS Ingress" || ING_CLASS="warn" && ING_STATUS="⚠ None"
 
-        # Metrics
-        if $METRICS_WORKING; then METRICS="✓ Installed"; METRICS_CLASS="ok";
-        else METRICS="⚠ Missing"; METRICS_CLASS="warn"; fi
+        [[ $HPA -gt 0 ]] && HPA_CLASS="ok" && HPA_STATUS="✓ $HPA HPA" || HPA_CLASS="warn" && HPA_STATUS="⚠ None"
 
-        # HPA
-        if [[ "$HPA_COUNT" -gt 0 ]]; then HPA_STATUS="✓ $HPA_COUNT HPAs"; HPA_CLASS="ok";
-        else HPA_STATUS="⚠ No HPA"; HPA_CLASS="warn"; fi
+        [[ $PDB -gt 0 ]] && PDB_CLASS="ok" && PDB_STATUS="✓ $PDB PDB" || PDB_CLASS="warn" && PDB_STATUS="⚠ None"
 
-        # PDB
-        if [[ "$PDB_COUNT" -gt 0 ]]; then PDB_STATUS="✓ $PDB_COUNT PDBs"; PDB_CLASS="ok";
-        else PDB_STATUS="⚠ No PDB"; PDB_CLASS="warn"; fi
-
-        # PVC
-        if [[ -z "$PVC_FAILED" ]]; then PVC_STATUS="✓ Healthy"; PVC_CLASS="ok";
-        else PVC_STATUS="✗ PVC Errors"; PVC_CLASS="bad"; fi
-
-        # Ingress
-        if [[ "$INGRESS_COUNT" -gt 0 ]]; then INGRESS_STATUS="✓ $INGRESS_COUNT Ingresses"; INGRESS_CLASS="ok";
-        else INGRESS_STATUS="⚠ No Ingress"; INGRESS_CLASS="warn"; fi
-
-
-
-        ############################################
-        # OVERALL CLUSTER HEALTH
-        ############################################
-        if [[ "$NODE_CLASS" == "bad" || "$POD_CLASS" == "bad" || "$PVC_CLASS" == "bad" ]]; then
-            OVERALL_STATUS="Unhealthy"
-            OVERALL_CLASS="bad"
-        elif [[ "$UPGRADE_CLASS" == "warn" || "$INGRESS_CLASS" == "warn" ]]; then
-            OVERALL_STATUS="Warning"
-            OVERALL_CLASS="warn"
+        if [[ "$NODE_CLASS" = "bad" || "$POD_CLASS" = "bad" || "$PVC_CLASS" = "bad" ]]; then
+            OVERALL="Unhealthy"; CLASS="bad";
+        elif [[ "$UPGRADE_CLASS" = "warn" || "$ING_CLASS" = "warn" ]]; then
+            OVERALL="Warning"; CLASS="warn";
         else
-            OVERALL_STATUS="Healthy"
-            OVERALL_CLASS="ok"
+            OVERALL="Healthy"; CLASS="ok";
         fi
 
 
-        ############################################
-        # CREATE REPORT FILE
-        ############################################
-        REPORT_FILE="${SUB}_${CLUSTER_NAME}_health.html"
-        REPORT_PATH="$REPORT_DIR/$REPORT_FILE"
+        ########################
+        # BUILD REPORT FILE
+        ########################
+        echo "$HTML_HEADER" > "$REPORT"
+
+        echo "<div class='card'>
+        <h1>AKS Report – $CLUSTER</h1>
+        <h2>Summary</h2>
+
+        <table>
+        <tr><th>Check</th><th>Status</th></tr>
+        <tr class='$NODE_CLASS'><td>Node Health</td><td>$NODE_STATUS</td></tr>
+        <tr class='$POD_CLASS'><td>Pod Status</td><td>$POD_STATUS</td></tr>
+        <tr class='$UPGRADE_CLASS'><td>Upgrade</td><td>$UPGRADE_STATUS</td></tr>
+        <tr class='$MET_CLASS'><td>Metrics Server</td><td>$MET_STATUS</td></tr>
+        <tr class='$HPA_CLASS'><td>HPA</td><td>$HPA_STATUS</td></tr>
+        <tr class='$PDB_CLASS'><td>PDB</td><td>$PDB_STATUS</td></tr>
+        <tr class='$PVC_CLASS'><td>PVC Status</td><td>$PVC_STATUS</td></tr>
+        <tr class='$ING_CLASS'><td>Ingress</td><td>$ING_STATUS</td></tr>
+        </table>
+        </div>
+        " >> "$REPORT"
+
+        # Collapsible sections
+        echo "<button class='collapsible'>Node List</button><div class='content'><pre>" >> "$REPORT"
+        kubectl get nodes -o wide >> "$REPORT"
+        echo "</pre></div>" >> "$REPORT"
+
+        echo "<button class='collapsible'>Pods</button><div class='content'><pre>" >> "$REPORT"
+        kubectl get pods --all-namespaces -o wide >> "$REPORT"
+        echo "</pre></div>" >> "$REPORT"
+
+        echo "<button class='collapsible'>CPU/Memory – Nodes</button><div class='content'><pre>" >> "$REPORT"
+        kubectl top nodes >> "$REPORT" 2>/dev/null || echo "Metrics Missing" >> "$REPORT"
+        echo "</pre></div>" >> "$REPORT"
+
+        echo "<button class='collapsible'>CPU/Memory – Pods</button><div class='content'><pre>" >> "$REPORT"
+        kubectl top pods --all-namespaces >> "$REPORT" 2>/dev/null || echo "Metrics Missing" >> "$REPORT"
+        echo "</pre></div>" >> "$REPORT"
+
+        echo "</body></html>" >> "$REPORT"
 
 
-        ###################### HTML HEADER ########################
-        echo "<html>
-<head>
-<title>AKS Health Report - $CLUSTER_NAME</title>
-<style>
-body { font-family: Arial, sans-serif; margin: 20px; }
-h1 { color:#2c3e50; }
-h2 { color:#34495e; }
-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 15px; }
-th, td { padding: 10px; border: 1px solid #ccc; }
-th { background: #f4f4f4; }
-.ok { background:#d4edda; color:#155724; }
-.warn { background:#fff3cd; color:#856404; }
-.bad { background:#f8d7da; color:#721c24; }
-
-pre {
-    background:#f7f7f7; 
-    padding:10px; 
-    border:1px solid #ccc; 
-    overflow-x:auto;
-}
-
-.collapsible {
-    background-color: #eee; 
-    cursor: pointer; 
-    padding: 12px; 
-    width: 100%; 
-    border: none; 
-    text-align: left; 
-    outline: none; 
-    font-size: 16px;
-}
-.active, .collapsible:hover { background-color: #ddd; }
-.content { padding:10px; display:none; border:1px solid #ccc; margin-bottom:10px; }
-
-</style>
-<script>
-document.addEventListener('DOMContentLoaded', function(){
-    var coll = document.getElementsByClassName('collapsible');
-    for(let i=0;i<coll.length;i++){
-        coll[i].addEventListener('click', function(){
-            this.classList.toggle('active');
-            var content = this.nextElementSibling;
-            content.style.display = content.style.display === 'block' ? 'none':'block';
-        });
-    }
-});
-</script>
-</head>
-<body>
-
-<h1>AKS Health Report - $CLUSTER_NAME</h1>
-" > "$REPORT_PATH"
-
-
-
-        ############################################
-        # SUMMARY TABLE
-        ############################################
-        echo "<h2>Summary</h2>
-<table>
-<tr><th>Check</th><th>Status</th></tr>
-<tr class=\"$NODE_CLASS\"><td>Node Health</td><td>$NODE_STATUS</td></tr>
-<tr class=\"$POD_CLASS\"><td>Pod Status</td><td>$POD_STATUS</td></tr>
-<tr class=\"$UPGRADE_CLASS\"><td>Upgrade Status</td><td>$UPGRADE_STATUS</td></tr>
-<tr class=\"$METRICS_CLASS\"><td>Metrics Server</td><td>$METRICS</td></tr>
-<tr class=\"$HPA_CLASS\"><td>HPA</td><td>$HPA_STATUS</td></tr>
-<tr class=\"$PDB_CLASS\"><td>PDB</td><td>$PDB_STATUS</td></tr>
-<tr class=\"$PVC_CLASS\"><td>PVC Status</td><td>$PVC_STATUS</td></tr>
-<tr class=\"$INGRESS_CLASS\"><td>Ingress Status</td><td>$INGRESS_STATUS</td></tr>
-</table>
-" >> "$REPORT_PATH"
-
-
-        ############################################
-        # COLLAPSIBLE DATA SECTIONS
-        ############################################
-
-        echo "<button class='collapsible'>Node List</button><div class='content'><pre>" >> "$REPORT_PATH"
-        kubectl get nodes -o wide >> "$REPORT_PATH"
-        echo "</pre></div>" >> "$REPORT_PATH"
-
-        echo "<button class='collapsible'>Pods</button><div class='content'><pre>" >> "$REPORT_PATH"
-        kubectl get pods --all-namespaces -o wide >> "$REPORT_PATH"
-        echo "</pre></div>" >> "$REPORT_PATH"
-
-        echo "<button class='collapsible'>Node CPU/Memory</button><div class='content'><pre>" >> "$REPORT_PATH"
-        kubectl top nodes >> "$REPORT_PATH" 2>/dev/null || echo "Metrics server missing" >> "$REPORT_PATH"
-        echo "</pre></div>" >> "$REPORT_PATH"
-
-        echo "<button class='collapsible'>Pod CPU/Memory</button><div class='content'><pre>" >> "$REPORT_PATH"
-        kubectl top pods --all-namespaces >> "$REPORT_PATH" 2>/dev/null || echo "Metrics server missing" >> "$REPORT_PATH"
-        echo "</pre></div>" >> "$REPORT_PATH"
-
-        echo "</body></html>" >> "$REPORT_PATH"
-
-
-        ############################################
-        # ADD ENTRY TO MASTER INDEX
-        ############################################
-        echo "<tr class=\"$OVERALL_CLASS\">
-               <td>$SUB</td>
-               <td>$CLUSTER_NAME</td>
-               <td>$OVERALL_STATUS</td>
-               <td><a href=\"$REPORT_FILE\">View Report</a></td>
-               </tr>" >> $INDEX_FILE
+        ########################
+        # ADD TO DASHBOARD
+        ########################
+        echo "<tr class='$CLASS'>
+              <td>$SUB</td>
+              <td>$CLUSTER</td>
+              <td>$OVERALL</td>
+              <td><a href='$REPORT_FILE'>View Report</a></td>
+              </tr>" >> "$MASTER"
 
     done
 done
 
+echo "</table></div></body></html>" >> "$MASTER"
 
-echo "</table></body></html>" >> $INDEX_FILE
-echo "[INFO] All reports generated successfully with full styling and colors."
+echo "-------------------------------------------"
+echo "AKS Health reports generated successfully!"
+echo "HTML Dashboard: $MASTER"
+echo "-------------------------------------------"
