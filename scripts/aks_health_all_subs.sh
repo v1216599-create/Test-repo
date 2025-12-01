@@ -163,105 +163,147 @@ for SUB in $SUBS; do
         REPORT_FILE="${SUB}_${CLUSTER}.html"
         REPORT="$REPORT_DIR/$REPORT_FILE"
 
-        #######################################
-        # HEALTH CHECKS
-        #######################################
+#######################################
+# HEALTH CHECKS
+#######################################
 
-        NODE_NOT_READY=$(kubectl get nodes --no-headers | awk '$2!="Ready"{print}')
-        CRASH=$(kubectl get pods --all-namespaces | grep -i crashloop || true)
-        PVC_FAIL=$(kubectl get pvc --all-namespaces | grep -i failed || true)
-        UPGRADE=$(az aks get-upgrades -g "$RG" -n "$CLUSTER" --query controlPlaneProfile.upgrades[].kubernetesVersion -o tsv)
+# Cluster Kubernetes version
+CLUSTER_VERSION=$(az aks show -g "$RG" -n "$CLUSTER" --query kubernetesVersion -o tsv)
 
-        METRICS=false
-        kubectl top nodes &>/dev/null && METRICS=true
+# Node Autoscaling Info (first nodepool)
+AUTOSCALE=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" --query '[0].enableAutoScaling' -o tsv)
+MIN_COUNT=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" --query '[0].minCount' -o tsv)
+MAX_COUNT=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" --query '[0].maxCount' -o tsv)
 
-        INGRESS=$(kubectl get ingress --all-namespaces --no-headers 2>/dev/null | wc -l)
-        HPA=$(kubectl get hpa --all-namespaces --no-headers 2>/dev/null | wc -l)
-        PDB=$(kubectl get pdb --all-namespaces --no-headers 2>/dev/null | wc -l)
+# Node health
+NODE_NOT_READY=$(kubectl get nodes --no-headers | awk '$2!="Ready"{print}')
 
-        # Color classification
-        [[ -z "$NODE_NOT_READY" ]] && NODE_CLASS="ok" && NODE_STATUS="✓ Healthy" || NODE_CLASS="bad" && NODE_STATUS="✗ Node Issue"
-        [[ -z "$CRASH" ]] && POD_CLASS="ok" && POD_STATUS="✓ Healthy" || POD_CLASS="bad" && POD_STATUS="✗ CrashLoop Detected"
-        [[ -z "$PVC_FAIL" ]] && PVC_CLASS="ok" && PVC_STATUS="✓ Healthy" || PVC_CLASS="bad" && PVC_STATUS="✗ PVC Error"
+# Pod crash detection
+CRASH=$(kubectl get pods --all-namespaces | grep -i crashloop || true)
 
-        [[ -n "$UPGRADE" ]] && UPGRADE_CLASS="warn" && UPGRADE_STATUS="⚠ Upgrade Available" || UPGRADE_CLASS="ok" && UPGRADE_STATUS="✓ Latest"
+# PVC failures
+PVC_FAIL=$(kubectl get pvc --all-namespaces | grep -i failed || true)
 
-        $METRICS && MET_CLASS="ok" && MET_STATUS="✓ Installed" || MET_CLASS="warn" && MET_STATUS="⚠ Missing"
+# Kubernetes upgrade availability
+UPGRADE=$(az aks get-upgrades -g "$RG" -n "$CLUSTER" --query controlPlaneProfile.upgrades[].kubernetesVersion -o tsv)
 
-        [[ $INGRESS -gt 0 ]] && ING_CLASS="ok" && ING_STATUS="✓ $INGRESS Ingress" || ING_CLASS="warn" && ING_STATUS="⚠ None"
+# Ingress / HPA / PDB counts
+INGRESS=$(kubectl get ingress --all-namespaces --no-headers 2>/dev/null | wc -l)
+HPA=$(kubectl get hpa --all-namespaces --no-headers 2>/dev/null | wc -l)
+PDB=$(kubectl get pdb --all-namespaces --no-headers 2>/dev/null | wc -l)
 
-        [[ $HPA -gt 0 ]] && HPA_CLASS="ok" && HPA_STATUS="✓ $HPA HPA" || HPA_CLASS="warn" && HPA_STATUS="⚠ None"
+#######################################
+# STATUS MAPPING
+#######################################
 
-        [[ $PDB -gt 0 ]] && PDB_CLASS="ok" && PDB_STATUS="✓ $PDB PDB" || PDB_CLASS="warn" && PDB_STATUS="⚠ None"
+# Node
+[[ -z "$NODE_NOT_READY" ]] && NODE_CLASS="ok" && NODE_STATUS="✓ Healthy" \
+                          || NODE_CLASS="bad" && NODE_STATUS="✗ Node Issues"
 
-        if [[ "$NODE_CLASS" = "bad" || "$POD_CLASS" = "bad" || "$PVC_CLASS" = "bad" ]]; then
-            OVERALL="Unhealthy"; CLASS="bad";
-        elif [[ "$UPGRADE_CLASS" = "warn" || "$ING_CLASS" = "warn" ]]; then
-            OVERALL="Warning"; CLASS="warn";
-        else
-            OVERALL="Healthy"; CLASS="ok";
-        fi
+# Pods
+[[ -z "$CRASH" ]] && POD_CLASS="ok" && POD_STATUS="✓ Healthy" \
+                  || POD_CLASS="bad" && POD_STATUS="✗ CrashLoop Found"
 
+# PVC
+[[ -z "$PVC_FAIL" ]] && PVC_CLASS="ok" && PVC_STATUS="✓ Healthy" \
+                     || PVC_CLASS="bad" && PVC_STATUS="✗ PVC Error"
 
-        ########################
-        # BUILD REPORT FILE
-        ########################
-        echo "$HTML_HEADER" > "$REPORT"
+# Autoscaling
+if [[ "$AUTOSCALE" == "true" ]]; then
+    AUTO_STATUS="✓ Enabled (Min: $MIN_COUNT, Max: $MAX_COUNT)"
+    AUTO_CLASS="ok"
+else
+    AUTO_STATUS="✗ Disabled"
+    AUTO_CLASS="warn"
+fi
 
-        echo "<div class='card'>
-        <h1>AKS Report – $CLUSTER</h1>
-        <h2>Summary</h2>
+# Upgrade availability
+[[ -n "$UPGRADE" ]] && UPGRADE_CLASS="warn" && UPGRADE_STATUS="⚠ Available ($UPGRADE)" \
+                    || UPGRADE_CLASS="ok" && UPGRADE_STATUS="✓ Latest"
 
-        <table>
-        <tr><th>Check</th><th>Status</th></tr>
-        <tr class='$NODE_CLASS'><td>Node Health</td><td>$NODE_STATUS</td></tr>
-        <tr class='$POD_CLASS'><td>Pod Status</td><td>$POD_STATUS</td></tr>
-        <tr class='$UPGRADE_CLASS'><td>Upgrade</td><td>$UPGRADE_STATUS</td></tr>
-        <tr class='$MET_CLASS'><td>Metrics Server</td><td>$MET_STATUS</td></tr>
-        <tr class='$HPA_CLASS'><td>HPA</td><td>$HPA_STATUS</td></tr>
-        <tr class='$PDB_CLASS'><td>PDB</td><td>$PDB_STATUS</td></tr>
-        <tr class='$PVC_CLASS'><td>PVC Status</td><td>$PVC_STATUS</td></tr>
-        <tr class='$ING_CLASS'><td>Ingress</td><td>$ING_STATUS</td></tr>
-        </table>
-        </div>
-        " >> "$REPORT"
+# Ingress
+[[ $INGRESS -gt 0 ]] && ING_CLASS="ok" && ING_STATUS="✓ $INGRESS" \
+                    || ING_CLASS="warn" && ING_STATUS="⚠ None"
 
-        # Collapsible sections
-        echo "<button class='collapsible'>Node List</button><div class='content'><pre>" >> "$REPORT"
-        kubectl get nodes -o wide >> "$REPORT"
-        echo "</pre></div>" >> "$REPORT"
+# HPA
+[[ $HPA -gt 0 ]] && HPA_CLASS="ok" && HPA_STATUS="✓ $HPA" \
+                || HPA_CLASS="warn" && HPA_STATUS="⚠ None"
 
-        echo "<button class='collapsible'>Pods</button><div class='content'><pre>" >> "$REPORT"
-        kubectl get pods --all-namespaces -o wide >> "$REPORT"
-        echo "</pre></div>" >> "$REPORT"
+# PDB
+[[ $PDB -gt 0 ]] && PDB_CLASS="ok" && PDB_STATUS="✓ $PDB" \
+                || PDB_CLASS="warn" && PDB_STATUS="⚠ None"
 
-        echo "<button class='collapsible'>CPU/Memory – Nodes</button><div class='content'><pre>" >> "$REPORT"
-        kubectl top nodes >> "$REPORT" 2>/dev/null || echo "Metrics Missing" >> "$REPORT"
-        echo "</pre></div>" >> "$REPORT"
+#######################################
+# OVERALL STATUS
+#######################################
 
-        echo "<button class='collapsible'>CPU/Memory – Pods</button><div class='content'><pre>" >> "$REPORT"
-        kubectl top pods --all-namespaces >> "$REPORT" 2>/dev/null || echo "Metrics Missing" >> "$REPORT"
-        echo "</pre></div>" >> "$REPORT"
+if [[ "$NODE_CLASS" = "bad" || "$POD_CLASS" = "bad" || "$PVC_CLASS" = "bad" ]]; then
+    OVERALL="Unhealthy"; CLASS="bad";
+elif [[ "$UPGRADE_CLASS" = "warn" || "$AUTO_CLASS" = "warn" ]]; then
+    OVERALL="Warning"; CLASS="warn";
+else
+    OVERALL="Healthy"; CLASS="ok";
+fi
 
-        echo "</body></html>" >> "$REPORT"
+#########################################
+# BUILD REPORT HTML
+#########################################
 
+echo "$HTML_HEADER" > "$REPORT"
 
-        ########################
-        # ADD TO DASHBOARD
-        ########################
-        echo "<tr class='$CLASS'>
-              <td>$SUB</td>
-              <td>$CLUSTER</td>
-              <td>$OVERALL</td>
-              <td><a href='$REPORT_FILE'>View Report</a></td>
-              </tr>" >> "$MASTER"
+echo "<div class='card'>
+<h1>AKS Report – $CLUSTER</h1>
+<h2>Summary</h2>
+
+<table>
+<tr><th>Check</th><th>Status</th></tr>
+
+<tr class='$NODE_CLASS'><td>Node Health</td><td>$NODE_STATUS</td></tr>
+<tr class='$POD_CLASS'><td>Pod Status</td><td>$POD_STATUS</td></tr>
+<tr class='$PVC_CLASS'><td>PVC Health</td><td>$PVC_STATUS</td></tr>
+
+<tr class='$AUTO_CLASS'><td>Node Autoscaling</td><td>$AUTO_STATUS</td></tr>
+
+<tr class='ok'><td>Cluster Version</td><td>✓ $CLUSTER_VERSION</td></tr>
+
+<tr class='$UPGRADE_CLASS'><td>Upgrade Availability</td><td>$UPGRADE_STATUS</td></tr>
+
+<tr class='$ING_CLASS'><td>Ingress</td><td>$ING_STATUS</td></tr>
+<tr class='$HPA_CLASS'><td>HPA</td><td>$HPA_STATUS</td></tr>
+<tr class='$PDB_CLASS'><td>PDB</td><td>$PDB_STATUS</td></tr>
+
+</table>
+</div>
+" >> "$REPORT"
+
+# Collapsible Node List
+echo "<button class='collapsible'>Node List</button><div class='content'><pre>" >> "$REPORT"
+kubectl get nodes -o wide >> "$REPORT"
+echo "</pre></div>" >> "$REPORT"
+
+# Collapsible Pods
+echo "<button class='collapsible'>Pods</button><div class='content'><pre>" >> "$REPORT"
+kubectl get pods --all-namespaces -o wide >> "$REPORT"
+echo "</pre></div>" >> "$REPORT"
+
+echo "</body></html>" >> "$REPORT"
+
+#########################################
+# ADD TO MASTER DASHBOARD
+#########################################
+echo "<tr class='$CLASS'>
+<td>$SUB</td>
+<td>$CLUSTER</td>
+<td>$OVERALL</td>
+<td><a href='$REPORT_FILE'>View</a></td>
+</tr>" >> "$MASTER"
 
     done
 done
 
 echo "</table></div></body></html>" >> "$MASTER"
 
-echo "-------------------------------------------"
-echo "AKS Health reports generated successfully!"
-echo "HTML Dashboard: $MASTER"
-echo "-------------------------------------------"
+echo "--------------------------------------------------------------"
+echo "AKS Health Reports Generated Successfully!"
+echo "Dashboard: reports/index.html"
+echo "--------------------------------------------------------------"
