@@ -2,7 +2,7 @@ name: Multi-Subscription AKS Health Check
 
 on:
   schedule:
-    - cron: "*/10 * * * *"      # Daily 11:15 PM IST
+    - cron: "*/15 * * * *"      # Daily 11:15 PM IST
   workflow_dispatch:            # Allow manual trigger anytime
 
 jobs:
