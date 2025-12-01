@@ -1,4 +1,5 @@
 #!/bin/bash
+export AZURE_AKS_DISABLE_AUTO_VERSION_CHECK=true
 set -e
 
 REPORT_DIR="reports"
@@ -7,7 +8,7 @@ mkdir -p "$REPORT_DIR"
 FINAL_REPORT="$REPORT_DIR/AKS Cluster Health.html"
 
 ############################################
-# HTML HEADER (Pretty UI)
+# HTML HEADER
 ############################################
 HTML_HEADER='
 <html>
@@ -111,13 +112,13 @@ document.addEventListener("DOMContentLoaded",()=>{
 '
 
 ############################################
-# WRITE HEADER
+# START REPORT
 ############################################
 echo "$HTML_HEADER" > "$FINAL_REPORT"
 echo "<div class='card'><h1>AKS Cluster Health – All Subscriptions</h1></div>" >> "$FINAL_REPORT"
 
 ############################################
-# GET ALL SUBSCRIPTIONS
+# GET SUBSCRIPTIONS
 ############################################
 SUBS=$(az account list --query "[].{id:id,name:name}" -o json)
 
@@ -126,7 +127,7 @@ SUBS=$(az account list --query "[].{id:id,name:name}" -o json)
 ############################################
 for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
 
-    _jq() { echo "$row" | base64 --decode | jq -r "$1"; }
+    _jq(){ echo "$row" | base64 --decode | jq -r "$1"; }
 
     SUB_ID=$(_jq '.id')
     SUB_NAME=$(_jq '.name')
@@ -138,7 +139,7 @@ for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
     CLUSTERS=$(az aks list --query "[].{name:name,rg:resourceGroup}" -o json)
 
     if [[ $(echo "$CLUSTERS" | jq length) -eq 0 ]]; then
-        echo "<p>No AKS Clusters in this subscription.</p></div>" >> "$FINAL_REPORT"
+        echo "<p>No AKS clusters in this subscription.</p></div>" >> "$FINAL_REPORT"
         continue
     fi
 
@@ -147,7 +148,7 @@ for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
     ############################################
     for cluster in $(echo "$CLUSTERS" | jq -r '.[] | @base64'); do
 
-        _cjq() { echo "$cluster" | base64 --decode | jq -r "$1"; }
+        _cjq(){ echo "$cluster" | base64 --decode | jq -r "$1"; }
 
         CLUSTER=$(_cjq '.name')
         RG=$(_cjq '.rg')
@@ -160,7 +161,8 @@ for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
         # HEALTH CHECKS
         ############################################
 
-        CLUSTER_VERSION=$(az aks show -g "$RG" -n "$CLUSTER" --query kubernetesVersion -o tsv)
+        CLUSTER_VERSION=$(az aks show -g "$RG" -n "$CLUSTER" \
+                           --query kubernetesVersion -o tsv)
 
         AUTOSCALE=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" \
                         --query '[0].enableAutoScaling' -o tsv)
@@ -171,34 +173,30 @@ for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
         MAX_COUNT=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" \
                         --query '[0].maxCount' -o tsv)
 
-        ############################################
-        # NEW NODE + POD HEALTH LOGIC
-        ############################################
-
-        # Node readiness
+        # NEW Node readiness check
         NODE_NOT_READY=$(kubectl get nodes --no-headers | awk '$2!="Ready"{print}')
 
-        # Pod issues
+        # NEW Pod health logic (CrashLoop, Error, Pending)
         POD_CRASH=$(kubectl get pods -A --no-headers | \
                     awk '$4=="CrashLoopBackOff" || $3=="Error" || $3=="Pending"' || true)
 
-        # PVC issues
+        # PVC failures
         PVC_FAIL=$(kubectl get pvc -A 2>/dev/null | grep -i failed || true)
 
         ############################################
         # CLASSIFICATION
         ############################################
 
-        # Node health depends on nodes + pods
+        # Node health = Healthy only if all nodes Ready AND no crashing pods
         if [[ -z "$NODE_NOT_READY" && -z "$POD_CRASH" ]]; then
             NODE_CLASS="ok"
             NODE_STATUS="✓ Healthy"
         else
             NODE_CLASS="bad"
-            NODE_STATUS="✗ Issues"
+            NODE_STATUS="✗ Issues Found"
         fi
 
-        # Pod Health row
+        # Pod health
         if [[ -z "$POD_CRASH" ]]; then
             POD_CLASS="ok"
             POD_STATUS="✓ Healthy"
@@ -207,7 +205,7 @@ for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
             POD_STATUS="✗ Pod Issues"
         fi
 
-        # PVC Health
+        # PVC
         if [[ -z "$PVC_FAIL" ]]; then
             PVC_CLASS="ok"
             PVC_STATUS="✓ Healthy"
@@ -225,7 +223,9 @@ for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
             AUTO_STATUS="Disabled"
         fi
 
-        # Cluster overall
+        ############################################
+        # OVERALL CLUSTER HEALTH
+        ############################################
         if [[ "$NODE_CLASS" = "bad" || "$POD_CLASS" = "bad" ]]; then
             OVERALL_CLASS="bad"
             CLUSTER_HEALTH="✗ Unhealthy"
@@ -238,11 +238,10 @@ for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
         fi
 
         ############################################
-        # CLUSTER SUMMARY
+        # CLUSTER SUMMARY BLOCK
         ############################################
         echo "<div class='card'>
         <h3>Cluster: $CLUSTER</h3>
-
         <table>
         <tr><th>Check</th><th>Status</th></tr>
 
@@ -253,12 +252,11 @@ for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
         <tr class='$AUTO_CLASS'><td>Autoscaling</td><td>$AUTO_STATUS</td></tr>
         <tr class='ok'><td>Cluster Version</td><td>$CLUSTER_VERSION</td></tr>
 
-        </table>
-        </div>
+        </table></div>
         " >> "$FINAL_REPORT"
 
         ############################################
-        # NODE LIST (no roles, no kernel)
+        # NODE LIST (NO roles, NO kernel-version)
         ############################################
         echo "<button class='collapsible'>Node List</button>
         <div class='content'>
@@ -274,8 +272,7 @@ for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
             <th>External IP</th>
             <th>OS Image</th>
             <th>Container Runtime</th>
-        </tr>
-        " >> "$FINAL_REPORT"
+        </tr>" >> "$FINAL_REPORT"
 
         NODES=$(kubectl get nodes -o json)
 
@@ -292,7 +289,6 @@ for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
             OS=$(_n '.status.nodeInfo.osImage')
             RUNTIME=$(_n '.status.nodeInfo.containerRuntimeVersion')
 
-            # CPU/Mem
             if kubectl top nodes &>/dev/null; then
                 CPU=$(kubectl top node "$NAME" | awk 'NR==2{print $2}')
                 MEM=$(kubectl top node "$NAME" | awk 'NR==2{print $4}')
@@ -312,8 +308,7 @@ for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
                 <td>$EXTERNAL</td>
                 <td>$OS</td>
                 <td>$RUNTIME</td>
-            </tr>
-            " >> "$FINAL_REPORT"
+            </tr>" >> "$FINAL_REPORT"
 
         done
 
@@ -330,9 +325,9 @@ for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
         echo "</pre></div>" >> "$FINAL_REPORT"
 
         ############################################
-        # POD CPU/MEM USAGE
+        # POD CPU/MEM
         ############################################
-        echo "<button class='collapsible'>Pod CPU/Memory Usage</button>
+        echo "<button class='collapsible'>Pod CPU / Memory Usage</button>
         <div class='content'><pre>" >> "$FINAL_REPORT"
 
         if kubectl top pods -A &>/dev/null; then
@@ -351,7 +346,8 @@ done
 
 echo "</body></html>" >> "$FINAL_REPORT"
 
-echo "==================================================="
-echo "AKS Cluster Health Report generated successfully!"
-echo "Output: $FINAL_REPORT"
-echo "==================================================="
+echo "===================================================="
+echo "AKS Cluster Health Report generated!"
+echo "File location:"
+echo "$FINAL_REPORT"
+echo "===================================================="
