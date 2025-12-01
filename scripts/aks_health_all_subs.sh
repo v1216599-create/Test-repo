@@ -125,220 +125,245 @@ document.addEventListener("DOMContentLoaded", () => {
 '
 
 ############################################
-# MASTER INDEX START
+# INDEX PAGE (SUBSCRIPTION LIST)
 ############################################
-echo "$HTML_HEADER" > "$MASTER"
-echo "<div class='card'><h1>AKS Health Dashboard</h1>" >> "$MASTER"
 
-echo "<table>
-<tr>
-<th>Subscription</th>
-<th>Cluster</th>
-<th>Status</th>
-<th>Report</th>
-</tr>" >> "$MASTER"
+echo "$HTML_HEADER" > "$MASTER"
+echo "<div class='card'><h1>AKS Subscriptions</h1>" >> "$MASTER"
+echo "<table><tr><th>Subscription</th><th>Page</th></tr>" >> "$MASTER"
 
 ############################################
 # GET ALL SUBSCRIPTIONS
 ############################################
-SUBS=$(az account list --query "[].id" -o tsv)
+SUBS=$(az account list --query "[].{id:id, name:name}" -o json)
 
-for SUB in $SUBS; do
+for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
 
-    az account set --subscription "$SUB"
+    _jq() { echo "$row" | base64 --decode | jq -r "$1"; }
 
-    CLUSTERS=$(az aks list --query "[].{name:name, rg:resourceGroup}" -o json)
+    SUB_ID=$(_jq '.id')
+    SUB_NAME=$(_jq '.name')
 
-    if [[ $(echo "$CLUSTERS" | jq length) -eq 0 ]]; then continue; fi
+    # output subscription page filename exactly like portal name
+    SUB_FILE="$REPORT_DIR/$SUB_NAME.html"
 
-    for row in $(echo "$CLUSTERS" | jq -r '.[] | @base64'); do
+    echo "[INFO] Processing subscription: $SUB_NAME"
 
-        _jq() { echo "$row" | base64 --decode | jq -r "$1"; }
+    ############################################
+    # BUILD SUBSCRIPTION PAGE
+    ############################################
+    echo "$HTML_HEADER" > "$SUB_FILE"
+    echo "<div class='card'><h1>$SUB_NAME</h1>" >> "$SUB_FILE"
+    echo "<h2>AKS Clusters</h2>" >> "$SUB_FILE"
 
-        CLUSTER=$(_jq '.name')
-        RG=$(_jq '.rg')
+    echo "<table>
+    <tr>
+        <th>Cluster Name</th>
+        <th>Health</th>
+        <th>Report</th>
+    </tr>" >> "$SUB_FILE"
 
-        echo "[INFO] Processing cluster: $CLUSTER in subscription $SUB"
+    az account set --subscription "$SUB_ID"
 
+    # list clusters
+    CLUSTERS=$(az aks list --query "[].{name:name,rg:resourceGroup}" -o json)
+
+    ############################################
+    # PROCESS CLUSTERS IN THIS SUBSCRIPTION
+    ############################################
+    for cluster in $(echo "$CLUSTERS" | jq -r '.[] | @base64'); do
+
+        _cjq() { echo "$cluster" | base64 --decode | jq -r "$1"; }
+
+        CLUSTER=$(_cjq '.name')
+        RG=$(_cjq '.rg')
+
+        echo "[INFO] Processing cluster: $CLUSTER"
+
+        # report filename
+        REPORT="$REPORT_DIR/${SUB_NAME}_${CLUSTER}.html"
+
+        # prepare kubeconfig
         az aks get-credentials -g "$RG" -n "$CLUSTER" --overwrite-existing >/dev/null
 
-        REPORT_FILE="${SUB}_${CLUSTER}.html"
-        REPORT="$REPORT_DIR/$REPORT_FILE"
+        ###################################
+        # HEALTH CHECKS
+        ###################################
 
-#######################################
-# HEALTH CHECKS
-#######################################
+        # cluster version
+        CLUSTER_VERSION=$(az aks show -g "$RG" -n "$CLUSTER" --query kubernetesVersion -o tsv)
 
-# Cluster Kubernetes version
-CLUSTER_VERSION=$(az aks show -g "$RG" -n "$CLUSTER" --query kubernetesVersion -o tsv)
+        # autoscaling
+        AUTOSCALE=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" --query '[0].enableAutoScaling' -o tsv)
+        MIN_COUNT=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" --query '[0].minCount' -o tsv)
+        MAX_COUNT=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" --query '[0].maxCount' -o tsv)
 
-# Node Autoscaling Info (first nodepool)
-AUTOSCALE=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" --query '[0].enableAutoScaling' -o tsv)
-MIN_COUNT=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" --query '[0].minCount' -o tsv)
-MAX_COUNT=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" --query '[0].maxCount' -o tsv)
+        # node health
+        NODE_NOT_READY=$(kubectl get nodes --no-headers | awk '$2!="Ready"{print}')
 
-# Node health
-NODE_NOT_READY=$(kubectl get nodes --no-headers | awk '$2!="Ready"{print}')
+        # pod health
+        CRASH=$(kubectl get pods --all-namespaces | grep -i crashloop || true)
 
-# Pod crash detection
-CRASH=$(kubectl get pods --all-namespaces | grep -i crashloop || true)
+        # pvc health
+        PVC_FAIL=$(kubectl get pvc --all-namespaces 2>/dev/null | grep -i failed || true)
 
-# PVC failures
-PVC_FAIL=$(kubectl get pvc --all-namespaces 2>/dev/null | grep -i failed || true)
+        ####################################################
+        # CLASSIFICATION
+        ####################################################
 
-# Ingress / PDB counts
-INGRESS=$(kubectl get ingress --all-namespaces --no-headers 2>/dev/null | wc -l)
-PDB=$(kubectl get pdb --all-namespaces --no-headers 2>/dev/null | wc -l)
+        [[ -z "$NODE_NOT_READY" ]] \
+            && NODE_CLASS="ok" && NODE_STATUS="✓ Healthy" \
+            || NODE_CLASS="bad" && NODE_STATUS="✗ Issues"
 
-#######################################
-# STATUS MAPPING
-#######################################
+        [[ -z "$CRASH" ]] \
+            && POD_CLASS="ok" && POD_STATUS="✓ Healthy" \
+            || POD_CLASS="bad" && POD_STATUS="✗ CrashLoop"
 
-# Node health row
-if [[ -z "$NODE_NOT_READY" ]]; then
-  NODE_CLASS="ok"
-  NODE_STATUS="✓ Healthy"
-else
-  NODE_CLASS="bad"
-  NODE_STATUS="✗ Issues found"
-fi
+        [[ -z "$PVC_FAIL" ]] \
+            && PVC_CLASS="ok" && PVC_STATUS="✓ Healthy" \
+            || PVC_CLASS="bad" && PVC_STATUS="✗ PVC Failures"
 
-# Pod health row
-if [[ -z "$CRASH" ]]; then
-  POD_CLASS="ok"
-  POD_STATUS="✓ Healthy"
-else
-  POD_CLASS="bad"
-  POD_STATUS="✗ CrashLoop detected"
-fi
+        if [[ "$AUTOSCALE" == "true" ]]; then
+            AUTO_CLASS="ok"
+            AUTO_STATUS="Enabled (Min: $MIN_COUNT, Max: $MAX_COUNT)"
+        else
+            AUTO_CLASS="warn"
+            AUTO_STATUS="Disabled"
+        fi
 
-# PVC health row
-if [[ -z "$PVC_FAIL" ]]; then
-  PVC_CLASS="ok"
-  PVC_STATUS="✓ Healthy"
-else
-  PVC_CLASS="bad"
-  PVC_STATUS="✗ PVC failures"
-fi
+        # cluster overall
+        if [[ "$NODE_CLASS" = "bad" || "$POD_CLASS" = "bad" || "$PVC_CLASS" = "bad" ]]; then
+            OVERALL_CLASS="bad"
+            CLUSTER_HEALTH="Unhealthy"
+        elif [[ "$AUTO_CLASS" = "warn" ]]; then
+            OVERALL_CLASS="warn"
+            CLUSTER_HEALTH="Warning"
+        else
+            OVERALL_CLASS="ok"
+            CLUSTER_HEALTH="Healthy"
+        fi
 
-# Autoscaling row
-if [[ "$AUTOSCALE" == "true" ]]; then
-  AUTO_CLASS="ok"
-  AUTO_STATUS="✓ Enabled (Min: $MIN_COUNT, Max: $MAX_COUNT)"
-else
-  AUTO_CLASS="warn"
-  AUTO_STATUS="✗ Disabled"
-fi
+        ####################################################
+        # BUILD CLUSTER REPORT
+        ####################################################
 
-# Ingress row (optional info)
-if [[ $INGRESS -gt 0 ]]; then
-  ING_CLASS="ok"
-  ING_STATUS="✓ $INGRESS Ingress objects"
-else
-  ING_CLASS="warn"
-  ING_STATUS="⚠ None"
-fi
+        echo "$HTML_HEADER" > "$REPORT"
 
-# PDB row (optional info)
-if [[ $PDB -gt 0 ]]; then
-  PDB_CLASS="ok"
-  PDB_STATUS="✓ $PDB PDBs"
-else
-  PDB_CLASS="warn"
-  PDB_STATUS="⚠ None"
-fi
+        echo "<div class='card'>
+        <h1>$CLUSTER</h1>
+        <h2>Summary</h2>
 
-# Overall cluster health
-if [[ "$NODE_CLASS" = "bad" || "$POD_CLASS" = "bad" || "$PVC_CLASS" = "bad" ]]; then
-    OVERALL_CLASS="bad"
-    CLUSTER_HEALTH="✗ Unhealthy"
-elif [[ "$AUTO_CLASS" = "warn" || "$ING_CLASS" = "warn" || "$PDB_CLASS" = "warn" ]]; then
-    OVERALL_CLASS="warn"
-    CLUSTER_HEALTH="⚠ Warning"
-else
-    OVERALL_CLASS="ok"
-    CLUSTER_HEALTH="✓ Healthy"
-fi
+        <table>
+        <tr><th>Check</th><th>Status</th></tr>
 
-#########################################
-# BUILD REPORT HTML
-#########################################
+        <tr class='$OVERALL_CLASS'><td>Cluster Health</td><td>$CLUSTER_HEALTH</td></tr>
+        <tr class='$NODE_CLASS'><td>Node Health</td><td>$NODE_STATUS</td></tr>
+        <tr class='$POD_CLASS'><td>Pod Health</td><td>$POD_STATUS</td></tr>
+        <tr class='$PVC_CLASS'><td>PVC Health</td><td>$PVC_STATUS</td></tr>
+        <tr class='$AUTO_CLASS'><td>Autoscaling</td><td>$AUTO_STATUS</td></tr>
+        <tr class='ok'><td>Cluster Version</td><td>$CLUSTER_VERSION</td></tr>
 
-echo "$HTML_HEADER" > "$REPORT"
+        </table>
+        </div>
+        " >> "$REPORT"
 
-echo "<div class='card'>
-<h1>AKS Report – $CLUSTER</h1>
-<h2>Summary</h2>
+        ###############################################
+        # Node List (NEW ALIGNMENT, no kernel version)
+        ###############################################
+        
+        echo "<button class='collapsible'>Node List</button>
+        <div class='content'>
+        <table>
+            <tr>
+                <th>Name</th><th>Status</th><th>Roles</th><th>Age</th>
+                <th>Version</th><th>CPU</th><th>Memory</th>
+                <th>Internal-IP</th><th>External-IP</th><th>OS-Image</th><th>Container Runtime</th>
+            </tr>" >> "$REPORT"
 
-<table>
-<tr><th>Check</th><th>Status</th></tr>
+        # Get node names
+        NODES=$(kubectl get nodes -o json)
 
-<tr class='$OVERALL_CLASS'><td>Cluster Health</td><td>$CLUSTER_HEALTH</td></tr>
-<tr class='$NODE_CLASS'><td>Node Health</td><td>$NODE_STATUS</td></tr>
-<tr class='$POD_CLASS'><td>Pod Health</td><td>$POD_STATUS</td></tr>
-<tr class='$PVC_CLASS'><td>PVC Health</td><td>$PVC_STATUS</td></tr>
+        for node in $(echo "$NODES" | jq -r '.items[] | @base64'); do
+            _n() { echo "$node" | base64 --decode | jq -r "$1"; }
 
-<tr class='$AUTO_CLASS'><td>Node Autoscaling</td><td>$AUTO_STATUS</td></tr>
+            NAME=$(_n '.metadata.name')
+            STATUS=$(_n '.status.conditions[] | select(.type=="Ready") | .status')
+            ROLES=$(_n '.metadata.labels["kubernetes.io/role"]')
+            AGE=$(kubectl get node "$NAME" | awk 'NR==2{print $5}')
+            VERSION=$(_n '.status.nodeInfo.kubeletVersion')
+            INTERNAL=$(_n '.status.addresses[] | select(.type=="InternalIP") | .address')
+            EXTERNAL=$(_n '.status.addresses[] | select(.type=="ExternalIP") | .address')
+            OS=$(_n '.status.nodeInfo.osImage')
+            RUNTIME=$(_n '.status.nodeInfo.containerRuntimeVersion')
 
-<tr class='ok'><td>Cluster Version</td><td>✓ $CLUSTER_VERSION</td></tr>
+            # CPU/Mem from metrics server
+            if kubectl top nodes &>/dev/null; then
+                CPU=$(kubectl top node "$NAME" | awk 'NR==2{print $2}')
+                MEM=$(kubectl top node "$NAME" | awk 'NR==2{print $4}')
+            else
+                CPU="N/A"
+                MEM="N/A"
+            fi
 
-<tr class='$ING_CLASS'><td>Ingress</td><td>$ING_STATUS</td></tr>
-<tr class='$PDB_CLASS'><td>PDB</td><td>$PDB_STATUS</td></tr>
+            echo "<tr>
+                <td>$NAME</td>
+                <td>$STATUS</td>
+                <td>$ROLES</td>
+                <td>$AGE</td>
+                <td>$VERSION</td>
+                <td>$CPU</td>
+                <td>$MEM</td>
+                <td>$INTERNAL</td>
+                <td>$EXTERNAL</td>
+                <td>$OS</td>
+                <td>$RUNTIME</td>
+            </tr>" >> "$REPORT"
 
-</table>
-</div>
-" >> "$REPORT"
+        done
 
-#########################################
-# COLLAPSIBLE SECTIONS
-#########################################
+        echo "</table></div>" >> "$REPORT"
 
-# Node List (aligned in <pre>)
-echo "<button class='collapsible'>Node List</button><div class='content'><pre>" >> "$REPORT"
-kubectl get nodes -o wide >> "$REPORT"
-echo "</pre></div>" >> "$REPORT"
+        ###############################################
+        # Pods + Metrics
+        ###############################################
 
-# Node CPU/Memory (auto-detect metrics server)
-echo "<button class='collapsible'>Node CPU / Memory Usage</button><div class='content'><pre>" >> "$REPORT"
-if kubectl top nodes &>/dev/null; then
-  kubectl top nodes >> "$REPORT"
-else
-  echo "Metrics server not installed in this cluster." >> "$REPORT"
-fi
-echo "</pre></div>" >> "$REPORT"
+        echo "<button class='collapsible'>Pod List</button><div class='content'><pre>" >> "$REPORT"
+        kubectl get pods --all-namespaces -o wide >> "$REPORT"
+        echo "</pre></div>" >> "$REPORT"
 
-# Pods list
-echo "<button class='collapsible'>Pods (All Namespaces)</button><div class='content'><pre>" >> "$REPORT"
-kubectl get pods --all-namespaces -o wide >> "$REPORT"
-echo "</pre></div>" >> "$REPORT"
+        echo "<button class='collapsible'>Pod CPU/Memory Usage</button><div class='content'><pre>" >> "$REPORT"
+        if kubectl top pods --all-namespaces &>/dev/null; then
+            kubectl top pods --all-namespaces >> "$REPORT"
+        else
+            echo "Metrics server not installed." >> "$REPORT"
+        fi
+        echo "</pre></div>" >> "$REPORT"
 
-# Pod CPU/Memory
-echo "<button class='collapsible'>Pod CPU / Memory Usage</button><div class='content'><pre>" >> "$REPORT"
-if kubectl top pods --all-namespaces &>/dev/null; then
-  kubectl top pods --all-namespaces >> "$REPORT"
-else
-  echo "Metrics server not installed in this cluster." >> "$REPORT"
-fi
-echo "</pre></div>" >> "$REPORT"
+        echo "</body></html>" >> "$REPORT"
 
-echo "</body></html>" >> "$REPORT"
-
-#########################################
-# ADD TO MASTER DASHBOARD
-#########################################
-echo "<tr class='$OVERALL_CLASS'>
-<td>$SUB</td>
-<td>$CLUSTER</td>
-<td>$CLUSTER_HEALTH</td>
-<td><a href='$REPORT_FILE'>View</a></td>
-</tr>" >> "$MASTER"
+        #################################################
+        # ADD CLUSTER ENTRY TO SUBSCRIPTION PAGE
+        #################################################
+        echo "<tr class='$OVERALL_CLASS'>
+            <td>$CLUSTER</td>
+            <td>$CLUSTER_HEALTH</td>
+            <td><a href='${SUB_NAME}_${CLUSTER}.html'>View</a></td>
+        </tr>" >> "$SUB_FILE"
 
     done
+
+    echo "</table></div></body></html>" >> "$SUB_FILE"
+
+    #################################################
+    # ADD SUBSCRIPTION ENTRY TO MASTER INDEX
+    #################################################
+    echo "<tr><td>$SUB_NAME</td><td><a href='$SUB_NAME.html'>Open</a></td></tr>" >> "$MASTER"
+
 done
 
 echo "</table></div></body></html>" >> "$MASTER"
 
-echo "--------------------------------------------------------------"
+echo "====================================================================="
 echo "AKS Health Reports Generated Successfully!"
-echo "Dashboard: reports/index.html"
-echo "--------------------------------------------------------------"
+echo "Open: reports/index.html"
+echo "====================================================================="
