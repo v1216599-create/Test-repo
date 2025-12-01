@@ -1,73 +1,42 @@
-#!/bin/bash
-set -e
+name: Multi-Subscription AKS Health Check
 
-mkdir -p reports
+on:
+  schedule:
+    - cron: "0 3 * * *"      # Daily 8:30 AM IST
+  workflow_dispatch:          # Manual trigger
 
-echo "[INFO] Fetching all subscriptions..."
-SUBS=$(az account list --query "[].id" -o tsv)
+jobs:
+  aks-health:
+    runs-on: ubuntu-latest
 
-for SUB in $SUBS; do
-    echo "------------------------------------------------"
-    echo "[INFO] Switching to subscription: $SUB"
-    echo "------------------------------------------------"
-    az account set --subscription "$SUB"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    echo "[INFO] Getting AKS clusters..."
-    CLUSTERS=$(az aks list --query "[].{name:name, rg:resourceGroup}" -o json)
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: >
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
 
-    if [[ $(echo $CLUSTERS | jq length) -eq 0 ]]; then
-        echo "[INFO] No AKS clusters found in subscription $SUB"
-        continue
-    fi
+      - name: Install tools (kubectl + jq)
+        run: |
+          sudo az aks install-cli
+          sudo apt-get update -y
+          sudo apt-get install -y jq
 
-    for row in $(echo "${CLUSTERS}" | jq -r '.[] | @base64'); do
-        _jq() {
-            echo "${row}" | base64 --decode | jq -r "${1}"
-        }
+      - name: Run AKS Multi-Subscription Health Scan
+        run: |
+          chmod +x /aks_health_all_subs.sh
+          ./aks_health_all_subs.sh
 
-        CLUSTER_NAME=$(_jq '.name')
-        CLUSTER_RG=$(_jq '.rg')
-
-        echo ""
-        echo "==============================================="
-        echo "[INFO] Processing Cluster: $CLUSTER_NAME"
-        echo "==============================================="
-
-        az aks get-credentials -g "$CLUSTER_RG" -n "$CLUSTER_NAME" --overwrite-existing
-
-        REPORT="reports/${SUB}_${CLUSTER_NAME}_health.html"
-        echo "<html><body>" > "$REPORT"
-        echo "<h1>AKS Health Report: $CLUSTER_NAME</h1>" >> "$REPORT"
-        echo "<h2>Subscription: $SUB</h2>" >> "$REPORT"
-
-        echo "<h3>Cluster Info</h3><pre>" >> "$REPORT"
-        az aks show -g "$CLUSTER_RG" -n "$CLUSTER_NAME" -o table >> "$REPORT"
-        echo "</pre>" >> "$REPORT"
-
-        echo "<h3>Node Health</h3><pre>" >> "$REPORT"
-        kubectl get nodes -o wide >> "$REPORT"
-        echo "</pre>" >> "$REPORT"
-
-        echo "<h3>Node CPU/Memory</h3><pre>" >> "$REPORT"
-        kubectl top nodes >> "$REPORT" || echo "Metrics server not installed" >> "$REPORT"
-        echo "</pre>" >> "$REPORT"
-
-        echo "<h3>Pods (All Namespaces)</h3><pre>" >> "$REPORT"
-        kubectl get pods --all-namespaces -o wide >> "$REPORT"
-        echo "</pre>" >> "$REPORT"
-
-        echo "<h3>Pod CPU/Memory</h3><pre>" >> "$REPORT"
-        kubectl top pods --all-namespaces >> "$REPORT" || echo "Metrics server not installed" >> "$REPORT"
-        echo "</pre>" >> "$REPORT"
-
-        echo "<h3>Kubernetes Versions</h3><pre>" >> "$REPORT"
-        kubectl version --short >> "$REPORT"
-        echo "</pre>" >> "$REPORT"
-
-        echo "</body></html>" >> "$REPORT"
-
-        echo "[INFO] Report created: $REPORT"
-    done
-done
-
-echo "[INFO] All reports generated in reports/ folder."
+      - name: Upload HTML Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: aks-health-reports
+          path: reports/
