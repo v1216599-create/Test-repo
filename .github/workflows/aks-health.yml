@@ -31,10 +31,10 @@ jobs:
           sudo apt-get install -y jq
 
       - name: Make script executable
-        run: chmod +x scripts/aks_health_all_subs.sh
+        run: chmod +x aks_health_all_subs.sh
 
       - name: Run Multi-Subscription AKS Health Scan
-        run: ./scripts/aks_health_all_subs.sh
+        run: ./aks_health_all_subs.sh
 
       - name: Upload AKS Health Reports
         uses: actions/upload-artifact@v4
