@@ -1,42 +1,89 @@
-name: Multi-Subscription AKS Health Check
+#!/bin/bash
+set -e
 
-on:
-  schedule:
-    - cron: "0 3 * * *"      # Daily 8:30 AM IST
-  workflow_dispatch:          # Manual trigger
+REPORT_DIR="reports"
+mkdir -p $REPORT_DIR
 
-jobs:
-  aks-health:
-    runs-on: ubuntu-latest
+INDEX_FILE="$REPORT_DIR/index.html"
+echo "<html><body>" > $INDEX_FILE
+echo "<h1>AKS Health Scan Results</h1>" >> $INDEX_FILE
+echo "<ul>" >> $INDEX_FILE
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+echo "[INFO] Fetching all subscriptions..."
+SUBS=$(az account list --query "[].id" -o tsv)
 
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          creds: >
-            {
-              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
-              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
-              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
-              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
-            }
+for SUB in $SUBS; do
+    echo "------------------------------------------------"
+    echo "[INFO] Switching to subscription: $SUB"
+    echo "------------------------------------------------"
+    az account set --subscription "$SUB"
 
-      - name: Install tools (kubectl + jq)
-        run: |
-          sudo az aks install-cli
-          sudo apt-get update -y
-          sudo apt-get install -y jq
+    echo "[INFO] Getting AKS clusters..."
+    CLUSTERS=$(az aks list --query "[].{name:name, rg:resourceGroup}" -o json)
 
-      - name: Run AKS Multi-Subscription Health Scan
-        run: |
-          chmod +x /aks_health_all_subs.sh
-          ./aks_health_all_subs.sh
+    if [[ $(echo $CLUSTERS | jq length) -eq 0 ]]; then
+        echo "[INFO] No AKS clusters found in subscription $SUB"
+        continue
+    fi
 
-      - name: Upload HTML Reports
-        uses: actions/upload-artifact@v4
-        with:
-          name: aks-health-reports
-          path: reports/
+    for row in $(echo "${CLUSTERS}" | jq -r '.[] | @base64'); do
+        _jq() {
+            echo "${row}" | base64 --decode | jq -r "${1}"
+        }
+
+        CLUSTER_NAME=$(_jq '.name')
+        CLUSTER_RG=$(_jq '.rg')
+
+        echo ""
+        echo "==============================================="
+        echo "[INFO] Processing Cluster: $CLUSTER_NAME"
+        echo "==============================================="
+
+        az aks get-credentials -g "$CLUSTER_RG" -n "$CLUSTER_NAME" --overwrite-existing
+
+        REPORT_FILE="${SUB}_${CLUSTER_NAME}_health.html"
+        REPORT_PATH="$REPORT_DIR/$REPORT_FILE"
+
+        echo "<html><body>" > "$REPORT_PATH"
+        echo "<h1>AKS Health Report - $CLUSTER_NAME</h1>" >> "$REPORT_PATH"
+        echo "<h3>Subscription: $SUB</h3>" >> "$REPORT_PATH"
+
+        echo "<h3>Cluster Info</h3><pre>" >> "$REPORT_PATH"
+        az aks show -g "$CLUSTER_RG" -n "$CLUSTER_NAME" -o yaml >> "$REPORT_PATH"
+        echo "</pre>" >> "$REPORT_PATH"
+
+        echo "<h3>Node List</h3><pre>" >> "$REPORT_PATH"
+        kubectl get nodes -o wide >> "$REPORT_PATH"
+        echo "</pre>" >> "$REPORT_PATH"
+
+        echo "<h3>Node CPU/Memory Usage</h3><pre>" >> "$REPORT_PATH"
+        kubectl top nodes >> "$REPORT_PATH" || echo "Metrics server not installed" >> "$REPORT_PATH"
+        echo "</pre>" >> "$REPORT_PATH"
+
+        echo "<h3>Pods (All Namespaces)</h3><pre>" >> "$REPORT_PATH"
+        kubectl get pods --all-namespaces -o wide >> "$REPORT_PATH"
+        echo "</pre>" >> "$REPORT_PATH"
+
+        echo "<h3>Pod CPU/Memory Usage</h3><pre>" >> "$REPORT_PATH"
+        kubectl top pods --all-namespaces >> "$REPORT_PATH" || echo "Metrics server not installed" >> "$REPORT_PATH"
+        echo "</pre>" >> "$REPORT_PATH"
+
+        echo "<h3>Kubernetes Version</h3><pre>" >> "$REPORT_PATH"
+        kubectl version --output=yaml >> "$REPORT_PATH"
+        echo "</pre>" >> "$REPORT_PATH"
+
+        echo "</body></html>" >> "$REPORT_PATH"
+
+        echo "[INFO] Report created: $REPORT_PATH"
+
+        # Add link to index
+        echo "<li><a href=\"$REPORT_FILE\">$CLUSTER_NAME ($SUB)</a></li>" >> $INDEX_FILE
+
+    done
+done
+
+echo "</ul>" >> $INDEX_FILE
+echo "<p>Generated on: $(date)</p>" >> $INDEX_FILE
+echo "</body></html>" >> $INDEX_FILE
+
+echo "[INFO] Master index created: $INDEX_FILE"
