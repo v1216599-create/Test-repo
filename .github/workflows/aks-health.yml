@@ -2,7 +2,7 @@ name: Multi-Subscription AKS Health Check
 
 on:
   schedule:
-    - cron: "*/45 * * * *"
+    - cron: "*/15 * * * *"
   workflow_dispatch:
 
 jobs:
