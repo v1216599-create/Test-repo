@@ -2,8 +2,8 @@ name: Multi-Subscription AKS Health Check
 
 on:
   schedule:
-    - cron: "*/15 * * * *"        # Every 15 minutes
-  workflow_dispatch:              # Manual trigger
+    - cron: "*/15 * * * *"        # Runs every 15 minutes
+  workflow_dispatch:
 
 jobs:
   aks-health:
@@ -29,7 +29,7 @@ jobs:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       ####################################################################
-      # INSTALL REQUIRED TOOLS (kubectl, jq)
+      # INSTALL REQUIRED TOOLS (kubectl + jq)
       ####################################################################
       - name: Install tools (kubectl + jq)
         run: |
@@ -46,52 +46,63 @@ jobs:
           ./scripts/aks_health_all_subs.sh
 
       ####################################################################
-      # UPLOAD HTML REPORT TO AZURE STORAGE ACCOUNT
+      # UPLOAD HTML REPORT TO AZURE STORAGE (TIMESTAMPED, NO OVERWRITE)
       ####################################################################
-      - name: Upload HTML Report to Azure Storage
+      - name: Upload HTML Report to Azure Storage (Timestamped)
+        id: upload
         run: |
-          echo "Creating/Validating storage container..."
+          echo "Creating/Validating container..."
           az storage container create \
             --name ${{ secrets.AZURE_STORAGE_CONTAINER }} \
             --account-name ${{ secrets.AZURE_STORAGE_ACCOUNT_NAME }} \
             --account-key ${{ secrets.AZURE_STORAGE_ACCOUNT_KEY }}
 
-          echo "Uploading AKS Health HTML report..."
+          # Timestamp format: YYYY-MM-DD-HH-MM
+          TS=$(date +"%Y-%m-%d-%H-%M")
+
+          REPORT_NAME="AKS-Health-Report-$TS.html"
+
+          echo "Uploading report: $REPORT_NAME"
+
           az storage blob upload \
             --container-name ${{ secrets.AZURE_STORAGE_CONTAINER }} \
             --account-name ${{ secrets.AZURE_STORAGE_ACCOUNT_NAME }} \
             --account-key ${{ secrets.AZURE_STORAGE_ACCOUNT_KEY }} \
             --file "reports/AKS Cluster Health.html" \
-            --name "AKS-Health-Report.html" \
-            --overwrite true
+            --name "$REPORT_NAME" \
+            --overwrite false
+
+          echo "report_name=$REPORT_NAME" >> $GITHUB_OUTPUT
 
       ####################################################################
-      # GENERATE SAS URL FOR VIEWING THE REPORT IN BROWSER
+      # GENERATE SAS URL FOR TIMESTAMPED REPORT
       ####################################################################
       - name: Generate SAS URL for HTML Report
         id: sas
         run: |
           EXPIRY=$(date -u -d "3 days" '+%Y-%m-%dT%H:%MZ')
+
           TOKEN=$(az storage blob generate-sas \
             --account-name ${{ secrets.AZURE_STORAGE_ACCOUNT_NAME }} \
             --account-key ${{ secrets.AZURE_STORAGE_ACCOUNT_KEY }} \
             --container-name ${{ secrets.AZURE_STORAGE_CONTAINER }} \
-            --name "AKS-Health-Report.html" \
+            --name "${{ steps.upload.outputs.report_name }}" \
             --permissions r \
             --expiry $EXPIRY \
             -o tsv)
 
-          FULL_URL="https://${{ secrets.AZURE_STORAGE_ACCOUNT_NAME }}.blob.core.windows.net/${{ secrets.AZURE_STORAGE_CONTAINER }}/AKS-Health-Report.html?$TOKEN"
+          FULL_URL="https://${{ secrets.AZURE_STORAGE_ACCOUNT_NAME }}.blob.core.windows.net/${{ secrets.AZURE_STORAGE_CONTAINER }}/${{ steps.upload.outputs.report_name }}?$TOKEN"
 
           echo "sasurl=$FULL_URL" >> $GITHUB_OUTPUT
 
       ####################################################################
-      # DISPLAY THE SAS URL IN THE PIPELINE OUTPUT
+      # DISPLAY THE SAS URL IN WORKFLOW OUTPUT
       ####################################################################
       - name: Show Report URL
         run: |
           echo "==============================================="
           echo " AKS Health Report Uploaded Successfully"
-          echo " Access it here:"
+          echo " Report File: ${{ steps.upload.outputs.report_name }}"
+          echo " Access it using:"
           echo " ${{ steps.sas.outputs.sasurl }}"
           echo "==============================================="
