@@ -2,6 +2,12 @@
 export AZURE_AKS_DISABLE_AUTO_VERSION_CHECK=true
 set -e
 
+############################################
+# REQUIRED FOR GITHUB ACTIONS
+############################################
+# Makes az CLI use the credentials created by azure/login@v2
+export AZURE_CONFIG_DIR="$HOME/.azure"
+
 REPORT_DIR="reports"
 mkdir -p "$REPORT_DIR"
 
@@ -16,17 +22,14 @@ HTML_HEADER='
 <title>AKS Cluster Health</title>
 
 <style>
-
 body {
   font-family: Arial, sans-serif;
   margin: 20px;
   background: #eef2f7;
 }
-
 h1, h2, h3 {
   color: #2c3e50;
 }
-
 .card {
   background: white;
   padding: 20px;
@@ -34,7 +37,6 @@ h1, h2, h3 {
   border-radius: 12px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.08);
 }
-
 table {
   width: 100%;
   border-collapse: collapse;
@@ -43,19 +45,16 @@ table {
   overflow: hidden;
   font-size: 15px;
 }
-
 th {
   background: #2c3e50;
   color: white;
   padding: 12px;
   text-align: left;
 }
-
 td {
   padding: 10px;
   border-bottom: 1px solid #e8e8e8;
 }
-
 .ok { background:#d4edda !important; color:#155724 !important; }
 .warn { background:#fff3cd !important; color:#856404 !important; }
 .bad { background:#f8d7da !important; color:#721c24 !important; }
@@ -73,9 +72,7 @@ td {
   margin-top: 12px;
   text-align:left;
 }
-
 .collapsible:hover { background-color: #2980b9; }
-
 .content {
   padding: 12px;
   display: none;
@@ -83,7 +80,6 @@ td {
   border: 1px solid #dcdcdc;
   background: #fafafa;
 }
-
 pre {
   background:#2d3436;
   color:#dfe6e9;
@@ -91,7 +87,6 @@ pre {
   border-radius: 6px;
   overflow-x:auto;
 }
-
 </style>
 
 <script>
@@ -111,16 +106,20 @@ document.addEventListener("DOMContentLoaded",()=>{
 <body>
 '
 
-############################################
-# START REPORT
-############################################
 echo "$HTML_HEADER" > "$FINAL_REPORT"
-echo "<div class='card'><h1>AKS Cluster Health – All Subscriptions</h1></div>" >> "$FINAL_REPORT"
+echo "<div class='card'><h1>AKS Cluster Health – Selected Subscriptions</h1></div>" >> "$FINAL_REPORT"
 
 ############################################
-# GET SUBSCRIPTIONS
+# SUBSCRIPTION IDs FOR GITHUB ACTIONS SCAN
 ############################################
-SUBS=$(az account list --query "[].{id:id,name:name}" -o json)
+
+SUB1="3f499502-898a-4be8-8dc6-0b6260bd0c8c"
+SUB2="3f499502-898a-4be8-8dc6-0b6260bd0c8c"
+
+############################################
+# FETCH ONLY THESE SUBSCRIPTIONS
+############################################
+SUBS=$(az account list --query "[?id=='$SUB1' || id=='$SUB2'].{id:id,name:name}" -o json)
 
 ############################################
 # PROCESS SUBSCRIPTIONS
@@ -132,7 +131,10 @@ for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
     SUB_ID=$(_jq '.id')
     SUB_NAME=$(_jq '.name')
 
-    echo "<div class='card'><h2>Subscription: $SUB_NAME</h2>" >> "$FINAL_REPORT"
+    echo "<div class='card'>
+<h2>Subscription: $SUB_NAME</h2>
+<p><b>Subscription ID:</b> $SUB_ID</p>
+" >> "$FINAL_REPORT"
 
     az account set --subscription "$SUB_ID"
 
@@ -173,21 +175,20 @@ for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
         MAX_COUNT=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" \
                         --query '[0].maxCount' -o tsv)
 
-        # NEW Node readiness check
+        NODEPOOL_AUTOSCALE=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" \
+                --query "[].{name:name,auto:enableAutoScaling,min:minCount,max:maxCount}" -o tsv | \
+                awk '{print $1" (AutoScale="$2", Min="$3", Max="$4")"}' | tr '\n' '; ')
+
         NODE_NOT_READY=$(kubectl get nodes --no-headers | awk '$2!="Ready"{print}')
 
-        # NEW Pod health logic (CrashLoop, Error, Pending)
         POD_CRASH=$(kubectl get pods -A --no-headers | \
                     awk '$4=="CrashLoopBackOff" || $3=="Error" || $3=="Pending"' || true)
 
-        # PVC failures
         PVC_FAIL=$(kubectl get pvc -A 2>/dev/null | grep -i failed || true)
 
         ############################################
         # CLASSIFICATION
         ############################################
-
-        # Node health = Healthy only if all nodes Ready AND no crashing pods
         if [[ -z "$NODE_NOT_READY" && -z "$POD_CRASH" ]]; then
             NODE_CLASS="ok"
             NODE_STATUS="✓ Healthy"
@@ -196,7 +197,6 @@ for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
             NODE_STATUS="✗ Issues Found"
         fi
 
-        # Pod health
         if [[ -z "$POD_CRASH" ]]; then
             POD_CLASS="ok"
             POD_STATUS="✓ Healthy"
@@ -205,7 +205,6 @@ for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
             POD_STATUS="✗ Pod Issues"
         fi
 
-        # PVC
         if [[ -z "$PVC_FAIL" ]]; then
             PVC_CLASS="ok"
             PVC_STATUS="✓ Healthy"
@@ -214,7 +213,6 @@ for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
             PVC_STATUS="✗ PVC Failures"
         fi
 
-        # Autoscaling
         if [[ "$AUTOSCALE" == "true" ]]; then
             AUTO_CLASS="ok"
             AUTO_STATUS="Enabled (Min: $MIN_COUNT, Max: $MAX_COUNT)"
@@ -238,7 +236,7 @@ for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
         fi
 
         ############################################
-        # CLUSTER SUMMARY BLOCK
+        # CLUSTER SUMMARY BLOCK (unchanged)
         ############################################
         echo "<div class='card'>
         <h3>Cluster: $CLUSTER</h3>
@@ -250,34 +248,27 @@ for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
         <tr class='$POD_CLASS'><td>Pod Health</td><td>$POD_STATUS</td></tr>
         <tr class='$PVC_CLASS'><td>PVC Health</td><td>$PVC_STATUS</td></tr>
         <tr class='$AUTO_CLASS'><td>Autoscaling</td><td>$AUTO_STATUS</td></tr>
+        <tr><td>Nodepool Autoscale</td><td>$NODEPOOL_AUTOSCALE</td></tr>
         <tr class='ok'><td>Cluster Version</td><td>$CLUSTER_VERSION</td></tr>
 
         </table></div>
         " >> "$FINAL_REPORT"
 
         ############################################
-        # NODE LIST (NO roles, NO kernel-version)
+        # NODE LIST (unchanged)
         ############################################
         echo "<button class='collapsible'>Node List</button>
         <div class='content'>
         <table>
         <tr>
-            <th>Name</th>
-            <th>Status</th>
-            <th>Age</th>
-            <th>Version</th>
-            <th>CPU</th>
-            <th>Memory</th>
-            <th>Internal IP</th>
-            <th>External IP</th>
-            <th>OS Image</th>
-            <th>Container Runtime</th>
+            <th>Name</th><th>Status</th><th>Age</th><th>Version</th>
+            <th>CPU</th><th>Memory</th><th>Internal IP</th><th>External IP</th>
+            <th>OS Image</th><th>Container Runtime</th>
         </tr>" >> "$FINAL_REPORT"
 
         NODES=$(kubectl get nodes -o json)
 
         for node in $(echo "$NODES" | jq -r '.items[] | @base64'); do
-
             _n(){ echo "$node" | base64 --decode | jq -r "$1"; }
 
             NAME=$(_n '.metadata.name')
@@ -325,6 +316,16 @@ for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
         echo "</pre></div>" >> "$FINAL_REPORT"
 
         ############################################
+        # SERVICES
+        ############################################
+        echo "<button class='collapsible'>Services</button>
+        <div class='content'><pre>" >> "$FINAL_REPORT"
+
+        kubectl get svc -A -o wide >> "$FINAL_REPORT"
+
+        echo "</pre></div>" >> "$FINAL_REPORT"
+
+        ############################################
         # POD CPU/MEM
         ############################################
         echo "<button class='collapsible'>Pod CPU / Memory Usage</button>
@@ -348,6 +349,5 @@ echo "</body></html>" >> "$FINAL_REPORT"
 
 echo "===================================================="
 echo "AKS Cluster Health Report generated!"
-echo "File location:"
-echo "$FINAL_REPORT"
+echo "Location: $FINAL_REPORT"
 echo "===================================================="
