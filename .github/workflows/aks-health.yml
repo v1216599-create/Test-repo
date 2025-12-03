@@ -2,8 +2,8 @@ name: Multi-Subscription AKS Health Check
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
-  workflow_dispatch:
+    - cron: "*/15 * * * *"        # Every 15 minutes
+  workflow_dispatch:              # Manual trigger
 
 jobs:
   aks-health:
@@ -14,46 +14,84 @@ jobs:
       contents: read
 
     steps:
+      ####################################################################
+      # CHECKOUT REPOSITORY
+      ####################################################################
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      ####################################################################
+      # LOGIN TO AZURE USING FEDERATED CREDENTIALS
+      ####################################################################
       - name: Azure Login
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Install tools
+      ####################################################################
+      # INSTALL REQUIRED TOOLS (kubectl, jq)
+      ####################################################################
+      - name: Install tools (kubectl + jq)
         run: |
           sudo az aks install-cli
           sudo apt-get update -y
           sudo apt-get install -y jq
 
-      - name: Run AKS Health Script
+      ####################################################################
+      # RUN THE AKS HEALTH SCRIPT
+      ####################################################################
+      - name: Run AKS Multi-Subscription Health Scan
         run: |
           chmod +x scripts/aks_health_all_subs.sh
           ./scripts/aks_health_all_subs.sh
 
-      - name: Upload HTML Reports to Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: aks-health-report
-          path: reports/
+      ####################################################################
+      # UPLOAD HTML REPORT TO AZURE STORAGE ACCOUNT
+      ####################################################################
+      - name: Upload HTML Report to Azure Storage
+        run: |
+          echo "Creating/Validating storage container..."
+          az storage container create \
+            --name ${{ secrets.AZURE_STORAGE_CONTAINER }} \
+            --account-name ${{ secrets.AZURE_STORAGE_ACCOUNT_NAME }} \
+            --account-key ${{ secrets.AZURE_STORAGE_ACCOUNT_KEY }}
 
-      - name: Send Email with AKS HTML Report
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: ${{ secrets.SMTP_SERVER }}
-          server_port: ${{ secrets.SMTP_PORT }}
-          username: ${{ secrets.SMTP_USERNAME }}
-          password: ${{ secrets.SMTP_PASSWORD }}
-          subject: "AKS Health Report - GitHub Actions"
-          to: ${{ secrets.MAIL_TO }}
-          from: ${{ secrets.MAIL_FROM }}
-          body: |
-            Hello,
+          echo "Uploading AKS Health HTML report..."
+          az storage blob upload \
+            --container-name ${{ secrets.AZURE_STORAGE_CONTAINER }} \
+            --account-name ${{ secrets.AZURE_STORAGE_ACCOUNT_NAME }} \
+            --account-key ${{ secrets.AZURE_STORAGE_ACCOUNT_KEY }} \
+            --file "reports/AKS Cluster Health.html" \
+            --name "AKS-Health-Report.html" \
+            --overwrite true
 
-            Please find the attached AKS Health Report (HTML).
+      ####################################################################
+      # GENERATE SAS URL FOR VIEWING THE REPORT IN BROWSER
+      ####################################################################
+      - name: Generate SAS URL for HTML Report
+        id: sas
+        run: |
+          EXPIRY=$(date -u -d "3 days" '+%Y-%m-%dT%H:%MZ')
+          TOKEN=$(az storage blob generate-sas \
+            --account-name ${{ secrets.AZURE_STORAGE_ACCOUNT_NAME }} \
+            --account-key ${{ secrets.AZURE_STORAGE_ACCOUNT_KEY }} \
+            --container-name ${{ secrets.AZURE_STORAGE_CONTAINER }} \
+            --name "AKS-Health-Report.html" \
+            --permissions r \
+            --expiry $EXPIRY \
+            -o tsv)
 
-            Regards,
-            GitHub Actions
-          attachments: "reports/AKS Cluster Health.html"
+          FULL_URL="https://${{ secrets.AZURE_STORAGE_ACCOUNT_NAME }}.blob.core.windows.net/${{ secrets.AZURE_STORAGE_CONTAINER }}/AKS-Health-Report.html?$TOKEN"
+
+          echo "sasurl=$FULL_URL" >> $GITHUB_OUTPUT
+
+      ####################################################################
+      # DISPLAY THE SAS URL IN THE PIPELINE OUTPUT
+      ####################################################################
+      - name: Show Report URL
+        run: |
+          echo "==============================================="
+          echo " AKS Health Report Uploaded Successfully"
+          echo " Access it here:"
+          echo " ${{ steps.sas.outputs.sasurl }}"
+          echo "==============================================="
