@@ -37,14 +37,9 @@ td { padding: 10px; border-bottom: 1px solid #e8e8e8; }
   font-size: 16px; border-radius: 6px; margin-top: 12px; text-align:left;
 }
 .collapsible:hover { background-color: #2980b9; }
-.content {
-  padding: 12px; display: none; border-radius: 6px;
-  border: 1px solid #dcdcdc; background: #fafafa;
-}
-pre {
-  background:#2d3436; color:#dfe6e9; padding:10px;
-  border-radius: 6px; overflow-x:auto;
-}
+.content { padding: 12px; display: none; border-radius: 6px;
+  border: 1px solid #dcdcdc; background: #fafafa; }
+pre { background:#2d3436; color:#dfe6e9; padding:10px; border-radius: 6px; overflow-x:auto; }
 </style>
 
 <script>
@@ -59,7 +54,6 @@ document.addEventListener("DOMContentLoaded",()=>{
   }
 });
 </script>
-
 </head>
 <body>
 '
@@ -82,7 +76,6 @@ SUBS=$(az account list --query "[?id=='$SUB1' || id=='$SUB2'].{id:id,name:name}"
 # PROCESS SUBSCRIPTIONS
 ############################################################
 for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
-
 _jq(){ echo "$row" | base64 --decode | jq -r "$1"; }
 
 SUB_ID=$(_jq '.id')
@@ -101,7 +94,7 @@ if [[ $(echo "$CLUSTERS" | jq length) -eq 0 ]]; then
 fi
 
 ############################################################
-# PROCESS EACH AKS CLUSTER
+# PROCESS CLUSTERS
 ############################################################
 for cluster in $(echo "$CLUSTERS" | jq -r '.[] | @base64'); do
 
@@ -258,16 +251,25 @@ echo "</pre></div>" >> "$FINAL_REPORT"
 ############################################################
 # POD LIST
 ############################################################
-echo "<button class='collapsible'>Pods</button>
+echo "<button class='collapsible'>Pod List</button>
 <div class='content'><pre>" >> "$FINAL_REPORT"
 kubectl get pods -A -o wide >> "$FINAL_REPORT"
 echo "</pre></div>" >> "$FINAL_REPORT"
 
 
 ############################################################
+# SERVICES LIST  (NEW SECTION)
+############################################################
+echo "<button class='collapsible'>Services List</button>
+<div class='content'><pre>" >> "$FINAL_REPORT"
+kubectl get svc -A -o wide >> "$FINAL_REPORT"
+echo "</pre></div>" >> "$FINAL_REPORT"
+
+
+############################################################
 # POD CPU/MEM
 ############################################################
-echo "<button class='collapsible'>Pod CPU / Memory</button>
+echo "<button class='collapsible'>Pod CPU / Memory Usage</button>
 <div class='content'><pre>" >> "$FINAL_REPORT"
 
 if kubectl top pods -A &>/dev/null; then
@@ -279,14 +281,14 @@ fi
 echo "</pre></div>" >> "$FINAL_REPORT"
 
 
-done # Cluster loop
+done  # End cluster loop
 echo "</div>" >> "$FINAL_REPORT"
 
-done # Subscription loop
+done  # End subscription loop
 
 echo "</body></html>" >> "$FINAL_REPORT"
 
 echo "===================================================="
-echo "AKS HTML Report Generated"
+echo "AKS HTML Report Generated (with Services List)"
 echo "Saved at: $FINAL_REPORT"
 echo "===================================================="
