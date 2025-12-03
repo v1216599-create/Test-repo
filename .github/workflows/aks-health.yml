@@ -2,8 +2,8 @@ name: Multi-Subscription AKS Health Check
 
 on:
   schedule:
-    - cron: "*/15 * * * *"        # Every 15 minutes
-  workflow_dispatch:              # Manual trigger
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
 
 jobs:
   aks-health:
@@ -22,19 +22,38 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Install tools (kubectl + jq)
+      - name: Install tools
         run: |
           sudo az aks install-cli
           sudo apt-get update -y
           sudo apt-get install -y jq
 
-      - name: Run AKS Multi-Subscription Health Scan
+      - name: Run AKS Health Script
         run: |
           chmod +x scripts/aks_health_all_subs.sh
           ./scripts/aks_health_all_subs.sh
 
-      - name: Upload HTML Reports
+      - name: Upload HTML Reports to Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: aks-health-reports
+          name: aks-health-report
           path: reports/
+
+      - name: Send Email with AKS HTML Report
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_SERVER }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "AKS Health Report - GitHub Actions"
+          to: ${{ secrets.MAIL_TO }}
+          from: ${{ secrets.MAIL_FROM }}
+          body: |
+            Hello,
+
+            Please find the attached AKS Health Report (HTML).
+
+            Regards,
+            GitHub Actions
+          attachments: "reports/AKS Cluster Health.html"
