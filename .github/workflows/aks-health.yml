@@ -2,8 +2,8 @@ name: Multi-Subscription AKS Health Check
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
-  workflow_dispatch:
+    - cron: "*/15 * * * *"        # Every 15 minutes
+  workflow_dispatch:              # Manual trigger
 
 jobs:
   aks-health:
