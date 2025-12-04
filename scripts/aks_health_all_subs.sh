@@ -62,7 +62,7 @@ document.addEventListener("DOMContentLoaded",()=>{
 # START REPORT
 ############################################################
 echo "$HTML_HEADER" > "$FINAL_REPORT"
-echo "<div class='card'><h1>AKS Cluster Health – Selected Subscriptions</h1></div>" >> "$FINAL_REPORT"
+echo "<div class='card'><h1>AKS Cluster Health – Report</h1></div>" >> "$FINAL_REPORT"
 
 ############################################################
 # SUBSCRIPTIONS TO SCAN
