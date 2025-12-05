@@ -185,16 +185,19 @@ for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
 </table></div>" >> "$FINAL_REPORT"
 
     ############################################################
-    # AUTOMATIC UPGRADE MODE (PORTAL MAPPING)
+    # AUTOMATIC UPGRADE MODE (NEW FIX)
+    # Read correct field:
+    # properties.upgradeSettings.automaticUpgradeChannel
     ############################################################
-    RAW_AUTO=$(az aks show -g "$RG" -n "$CL_NAME" --query "autoUpgradeChannel" -o tsv 2>/dev/null)
+    RAW_AUTO=$(az aks show -g "$RG" -n "$CL_NAME" \
+        --query "upgradeSettings.automaticUpgradeChannel" -o tsv 2>/dev/null)
 
     case "$RAW_AUTO" in
       patch)      AUTO_TYPE="Enabled with patch (recommended)" ;;
       stable)     AUTO_TYPE="Enabled with stable" ;;
       rapid)      AUTO_TYPE="Enabled with rapid" ;;
       nodeimage|node-image) AUTO_TYPE="Enabled with node image" ;;
-      none|"")    AUTO_TYPE="Disabled" ;;
+      ""|null)    AUTO_TYPE="Disabled" ;;
       *)          AUTO_TYPE="Disabled" ;;
     esac
 
@@ -292,7 +295,7 @@ $NODE_SCHED
 </pre></div>" >> "$FINAL_REPORT"
 
     ############################################################
-    # AUTOSCALING (NO SUMMARY)
+    # AUTOSCALING COLLAPSIBLE
     ############################################################
     SCALE=$(az aks nodepool list -g "$RG" --cluster-name "$CL_NAME" -o json \
       | jq -r '.[] | "\(.name): autoscale=\(.enableAutoScaling), min=\(.minCount), max=\(.maxCount)"')
@@ -301,9 +304,8 @@ $NODE_SCHED
 <div class='content'><pre>$SCALE</pre></div>" >> "$FINAL_REPORT"
 
     ############################################################
-    # PSA, RBAC, NODES, PODS, SERVICES, METRICS
+    # PSA / RBAC / NODES / PODS / SERVICES / METRICS
     ############################################################
-
     PSA=$(kubectl get ns -o json 2>/dev/null | jq -r \
       '.items[] | [.metadata.name,
        (.metadata.labels["pod-security.kubernetes.io/enforce"] // "none"),
