@@ -97,10 +97,9 @@ document.addEventListener("DOMContentLoaded",()=>{
 ############################################################
 echo "$HTML_HEADER" > "$FINAL_REPORT"
 
-# NEW — Clean Title (white background + blue border)
-echo "<div style='background:white;padding:20px;border-radius:12px;
-border-left:8px solid #3498db;margin-bottom:25px;'>
-<h1 style='color:black;margin:0;'>AKS Cluster Health – Report</h1>
+# NEW — Title matches collapsible styling
+echo "<div style='background:#3498db;padding:15px;border-radius:6px;margin-bottom:25px;'>
+<h1 style='color:white;margin:0;font-weight:bold;'>AKS Cluster Health – Report</h1>
 </div>" >> "$FINAL_REPORT"
 
 ############################################################
@@ -295,12 +294,13 @@ Image Scanning              : $IMG_SCAN
 " >> "$FINAL_REPORT"
 
 ############################################################
-# NODE LIST (with correct alignment)
+# NODE LIST  (ROLES REMOVED)
 ############################################################
 echo "<button class='collapsible'>Node List</button>
 <div class='content'><pre>" >> "$FINAL_REPORT"
 
-kubectl get nodes -o wide | column -t >> "$FINAL_REPORT"
+# Remove ROLES column → skip column 3
+kubectl get nodes -o wide | awk '{$3=""; print}' | column -t >> "$FINAL_REPORT"
 
 echo "</pre></div>" >> "$FINAL_REPORT"
 
