@@ -186,10 +186,23 @@ echo "<div class='card'>
 </table></div>" >> "$FINAL_REPORT"
 
     ############################################################
-    # 🔥 AUTO UPGRADE MODE (EXACT Azure Portal behavior)
+    # 🔥 FIX 1 — DETECT AUTOMATIC UPGRADE MODE (new + old fields)
     ############################################################
-RAW_AUTO=$(az aks show -g "$RG" -n "$CL_NAME" \
+
+# new schema
+RAW_AUTO_NEW=$(az aks show -g "$RG" -n "$CL_NAME" \
         --query "autoUpgradeProfile.upgradeChannel" -o tsv 2>/dev/null)
+
+# old schema (your cluster)
+RAW_AUTO_OLD=$(az aks show -g "$RG" -n "$CL_NAME" \
+        --query "autoUpgradeChannel" -o tsv 2>/dev/null)
+
+# choose whichever exists
+if [[ -n "$RAW_AUTO_NEW" && "$RAW_AUTO_NEW" != "null" ]]; then
+    RAW_AUTO="$RAW_AUTO_NEW"
+else
+    RAW_AUTO="$RAW_AUTO_OLD"
+fi
 
 case "$RAW_AUTO" in
   patch|Patch)
@@ -213,7 +226,7 @@ case "$RAW_AUTO" in
 esac
 
     ############################################################
-    # AUTOMATIC UPGRADE SCHEDULER (aksAutoUpgradeSchedule)
+    # AUTOMATIC UPGRADE SCHEDULER
     ############################################################
 CP_MC=$(az aks maintenanceconfiguration show \
         --name aksAutoUpgradeSchedule \
@@ -225,14 +238,14 @@ if [[ -n "$CP_MC" ]]; then
   CP_TIME=$(echo "$CP_MC" | jq -r '.maintenanceWindow.startTime // "00:00"')
   CP_UTC=$(echo "$CP_MC" | jq -r '.maintenanceWindow.utcOffset // "+00:00"')
   CP_DOW=$(echo "$CP_MC" | jq -r '.maintenanceWindow.schedule.weekly.dayOfWeek // empty')
-  CP_STR="$CP_DATE $CP_TIME $CP_UTC"
-  CP_SCHED=$(format_schedule "$CP_STR" "Weekly" "$CP_DOW")
+  CP_START="$CP_DATE $CP_TIME $CP_UTC"
+  CP_SCHED=$(format_schedule "$CP_START" "Weekly" "$CP_DOW")
 else
   CP_SCHED="Not Configured"
 fi
 
     ############################################################
-    # CLUSTER UPGRADE WINDOW (aksManagedAutoUpgradeSchedule)
+    # CLUSTER UPGRADE WINDOW
     ############################################################
 AUTO_MC=$(az aks maintenanceconfiguration show \
         --name aksManagedAutoUpgradeSchedule \
@@ -252,23 +265,23 @@ else
 fi
 
     ############################################################
-    # NODE CHANNEL TYPE (from autoUpgradeProfile)
+    # 🔥 FIX 2 — NODE SECURITY CHANNEL TYPE
     ############################################################
 RAW_NODE=$(az aks show -g "$RG" -n "$CL_NAME" \
-        --query "autoUpgradeProfile.nodeOSUpgradeChannel" -o tsv 2>/dev/null)
+           --query "autoUpgradeProfile.nodeOSUpgradeChannel" -o tsv 2>/dev/null)
 
 case "$RAW_NODE" in
-  NodeImage)       NODE_TYPE="Node Image" ;;
-  SecurityPatch)   NODE_TYPE="Security Patch" ;;
-  Rapid)           NODE_TYPE="Rapid" ;;
-  Stable)          NODE_TYPE="Stable" ;;
-  Patch)           NODE_TYPE="Patch" ;;
-  ""|null)         NODE_TYPE="Unmanaged" ;;
-  *)               NODE_TYPE="Unmanaged" ;;
+  NodeImage)      NODE_TYPE="Node Image" ;;
+  SecurityPatch)  NODE_TYPE="Security Patch" ;;
+  Patch)          NODE_TYPE="Patch" ;;
+  Stable)         NODE_TYPE="Stable" ;;
+  Rapid)          NODE_TYPE="Rapid" ;;
+  ""|null)        NODE_TYPE="Unmanaged" ;;
+  *)              NODE_TYPE="Unmanaged" ;;
 esac
 
     ############################################################
-    # NODE OS UPGRADE WINDOW (aksManagedNodeOSUpgradeSchedule)
+    # NODE OS UPGRADE WINDOW
     ############################################################
 NODE_MC=$(az aks maintenanceconfiguration show \
         --name aksManagedNodeOSUpgradeSchedule \
@@ -288,7 +301,7 @@ else
 fi
 
     ############################################################
-    # OUTPUT SCHEDULE COLLAPSIBLE
+    # OUTPUT
     ############################################################
 echo "<button class='collapsible'>Cluster Upgrade & Security Schedule</button>
 <div class='content'><pre>
@@ -307,20 +320,15 @@ $NODE_SCHED
 
 
     ############################################################
-    # AUTOSCALING
+    # Remaining sections: Autoscaling, PSA, RBAC, Nodes, Pods, Services, Metrics
     ############################################################
+
 SCALE=$(az aks nodepool list -g "$RG" --cluster-name "$CL_NAME" -o json \
       | jq -r '.[] | "\(.name): autoscale=\(.enableAutoScaling), min=\(.minCount), max=\(.maxCount)"')
 
 echo "<button class='collapsible'>Autoscaling Status – All Node Pools</button>
 <div class='content'><pre>$SCALE</pre></div>" >> "$FINAL_REPORT"
 
-
-    ############################################################
-    # PSA / RBAC / NODES / PODS / SERVICES / METRICS
-    ############################################################
-
-# PSA
 PSA=$(kubectl get ns -o json 2>/dev/null | jq -r \
   '.items[] | [.metadata.name,
    (.metadata.labels["pod-security.kubernetes.io/enforce"] // "none"),
@@ -333,7 +341,6 @@ NAMESPACE    ENFORCE    AUDIT    WARN
 $PSA
 </pre></div>" >> "$FINAL_REPORT"
 
-# RBAC
 RB1=$(kubectl get rolebindings -A -o wide 2>/dev/null)
 RB2=$(kubectl get clusterrolebindings -o wide 2>/dev/null)
 
@@ -346,22 +353,18 @@ ClusterRoleBindings:
 $RB2
 </pre></div>" >> "$FINAL_REPORT"
 
-# Nodes
 NODES=$(kubectl get nodes -o wide 2>/dev/null)
 echo "<button class='collapsible'>Node List</button>
 <div class='content'><pre>$NODES</pre></div>" >> "$FINAL_REPORT"
 
-# Pods
 PODS=$(kubectl get pods -A -o wide 2>/dev/null)
 echo "<button class='collapsible'>Pod List</button>
 <div class='content'><pre>$PODS</pre></div>" >> "$FINAL_REPORT"
 
-# Services
 SERVICES=$(kubectl get svc -A -o wide 2>/dev/null)
 echo "<button class='collapsible'>Services List</button>
 <div class='content'><pre>$SERVICES</pre></div>" >> "$FINAL_REPORT"
 
-# Metrics
 METRICS=$(kubectl top pods -A 2>/dev/null || echo "Metrics Not Available")
 echo "<button class='collapsible'>Pod CPU/Memory Usage</button>
 <div class='content'><pre>$METRICS</pre></div>" >> "$FINAL_REPORT"
