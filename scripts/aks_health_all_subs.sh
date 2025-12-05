@@ -40,6 +40,9 @@ td { padding: 10px; border-bottom: 1px solid #e8e8e8; }
 .content { padding: 12px; display: none; border-radius: 6px;
   border: 1px solid #dcdcdc; background: #fafafa; }
 pre { background:#2d3436; color:#dfe6e9; padding:10px; border-radius: 6px; overflow-x:auto; }
+
+/* NEW — Cluster Version Dark Green */
+.version-ok { background:#c8f7c5 !important; color:#145a32 !important; font-weight:bold; }
 </style>
 
 <script>
@@ -63,6 +66,10 @@ document.addEventListener("DOMContentLoaded",()=>{
 ############################################################
 echo "$HTML_HEADER" > "$FINAL_REPORT"
 echo "<div class='card'><h1>AKS Cluster Health – Report</h1></div>" >> "$FINAL_REPORT"
+
+# NEW — Blue banner heading
+echo "<div style='background:#1f6feb;color:white;padding:15px;border-radius:10px;margin-bottom:20px;'>
+<h1>AKS Cluster Health – Selected Subscriptions</h1></div>" >> "$FINAL_REPORT"
 
 ############################################################
 # SUBSCRIPTIONS TO SCAN
@@ -116,6 +123,11 @@ AUTOSCALE=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" --query '[0]
 MIN_COUNT=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" --query '[0].minCount' -o tsv || echo "N/A")
 MAX_COUNT=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" --query '[0].maxCount' -o tsv || echo "N/A")
 
+# NEW — Autoscaling status per node pool
+NODEPOOL_SCALE=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" -o json \
+  | jq -r '.[] | "\(.name): autoscale=\(.enableAutoScaling), min=\(.minCount), max=\(.maxCount)"' | tr '\n' '; ')
+[[ -z "$NODEPOOL_SCALE" ]] && NODEPOOL_SCALE="No Node Pools Found"
+
 NODE_NOT_READY=$(kubectl get nodes --no-headers 2>/dev/null | awk '$2!="Ready"{print}' || true)
 POD_CRASH=$(kubectl get pods -A --no-headers 2>/dev/null \
     | awk '$4=="CrashLoopBackOff" || $3=="Error" || $3=="Pending"' || true)
@@ -142,10 +154,30 @@ echo "<div class='card'>
 <tr class='$POD_CLASS'><td>Pod Health</td><td>$POD_STATUS</td></tr>
 <tr class='$PVC_CLASS'><td>PVC Health</td><td>$PVC_STATUS</td></tr>
 <tr class='$AUTO_CLASS'><td>Autoscaling</td><td>$AUTO_STATUS</td></tr>
-<tr><td>Cluster Version</td><td>$CLUSTER_VERSION</td></tr>
+
+<!-- NEW — per node pool autoscale -->
+<tr><td>Node Pool Autoscale Status</td><td>$NODEPOOL_SCALE</td></tr>
+
+<!-- NEW — Dark Green Version Row -->
+<tr class='version-ok'><td>Cluster Version</td><td>$CLUSTER_VERSION</td></tr>
+
 </table></div>
 " >> "$FINAL_REPORT"
 
+############################################################
+# NEW — OVERALL HEALTH STATUS BOX
+############################################################
+if [[ "$NODE_CLASS" == "ok" && "$POD_CLASS" == "ok" && "$PVC_CLASS" == "ok" ]]; then
+    OVERALL_STATUS="Healthy"
+    OVERALL_CLASS="version-ok"
+else
+    OVERALL_STATUS="Issues Found"
+    OVERALL_CLASS="bad"
+fi
+
+echo "<div class='card ${OVERALL_CLASS}' style='font-size:18px;font-weight:bold;'>
+Cluster Overall Health Status: $OVERALL_STATUS
+</div>" >> "$FINAL_REPORT"
 
 ############################################################
 # NETWORKING CHECKS
@@ -171,13 +203,12 @@ API Server Audit Logs       : $AUDIT_STATUS
 API Server Latency Metric   : $API_LAT
 </pre></div>" >> "$FINAL_REPORT"
 
-
 ############################################################
 # IDENTITY & ACCESS CHECKS
 ############################################################
 MANAGED_ID=$(az aks show -g "$RG" -n "$CLUSTER" --query identity.type -o tsv || echo "N/A")
 
-RBAC_ENABLED=$(az aks show -g "$RG" -n "$CLUSTER" --query enableRBAC -o tsv || echo "N/A")
+RBAC_ENABLED=$(az ks show -g "$RG" -n "$CLUSTER" --query enableRBAC -o tsv || echo "N/A")
 
 AAD_ENABLED=$(az aks show -g "$RG" -n "$CLUSTER" --query "aadProfile" -o json \
   | jq -r 'if . == null then "Disabled" else "Enabled" end' || echo "Unknown")
@@ -195,7 +226,6 @@ Service Principal Expiry    : $SP_EXPIRY
 </pre></div>
 " >> "$FINAL_REPORT"
 
-
 ############################################################
 # OBSERVABILITY CHECKS
 ############################################################
@@ -212,7 +242,6 @@ Prometheus                  : $PROM
 Grafana                     : $GF
 </pre></div>
 " >> "$FINAL_REPORT"
-
 
 ############################################################
 # SECURITY CHECKS
@@ -238,7 +267,6 @@ Image Scanning              : $IMG_SCAN
 </pre></div>
 " >> "$FINAL_REPORT"
 
-
 ############################################################
 # NODE LIST
 ############################################################
@@ -246,7 +274,6 @@ echo "<button class='collapsible'>Node List</button>
 <div class='content'><pre>" >> "$FINAL_REPORT"
 kubectl get nodes -o wide >> "$FINAL_REPORT"
 echo "</pre></div>" >> "$FINAL_REPORT"
-
 
 ############################################################
 # POD LIST
@@ -256,15 +283,13 @@ echo "<button class='collapsible'>Pod List</button>
 kubectl get pods -A -o wide >> "$FINAL_REPORT"
 echo "</pre></div>" >> "$FINAL_REPORT"
 
-
 ############################################################
-# SERVICES LIST  (NEW SECTION)
+# SERVICES LIST
 ############################################################
 echo "<button class='collapsible'>Services List</button>
 <div class='content'><pre>" >> "$FINAL_REPORT"
 kubectl get svc -A -o wide >> "$FINAL_REPORT"
 echo "</pre></div>" >> "$FINAL_REPORT"
-
 
 ############################################################
 # POD CPU/MEM
@@ -280,7 +305,6 @@ fi
 
 echo "</pre></div>" >> "$FINAL_REPORT"
 
-
 done  # End cluster loop
 echo "</div>" >> "$FINAL_REPORT"
 
@@ -289,6 +313,6 @@ done  # End subscription loop
 echo "</body></html>" >> "$FINAL_REPORT"
 
 echo "===================================================="
-echo "AKS HTML Report Generated (with Services List)"
+echo "AKS HTML Report Generated (with Enhancements)"
 echo "Saved at: $FINAL_REPORT"
 echo "===================================================="
