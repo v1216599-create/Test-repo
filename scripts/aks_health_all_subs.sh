@@ -186,18 +186,18 @@ echo "<div class='card'>
 </table></div>" >> "$FINAL_REPORT"
 
     ############################################################
-    # 🔥 FIX 1 — DETECT AUTOMATIC UPGRADE MODE (new + old fields)
+    # FIX 1 — AUTOMATIC UPGRADE MODE (new + old fields)
     ############################################################
 
-# new schema
+# New schema
 RAW_AUTO_NEW=$(az aks show -g "$RG" -n "$CL_NAME" \
         --query "autoUpgradeProfile.upgradeChannel" -o tsv 2>/dev/null)
 
-# old schema (your cluster)
+# Old schema
 RAW_AUTO_OLD=$(az aks show -g "$RG" -n "$CL_NAME" \
         --query "autoUpgradeChannel" -o tsv 2>/dev/null)
 
-# choose whichever exists
+# Choose whichever exists
 if [[ -n "$RAW_AUTO_NEW" && "$RAW_AUTO_NEW" != "null" ]]; then
     RAW_AUTO="$RAW_AUTO_NEW"
 else
@@ -226,7 +226,7 @@ case "$RAW_AUTO" in
 esac
 
     ############################################################
-    # AUTOMATIC UPGRADE SCHEDULER
+    # AUTOMATIC UPGRADE SCHEDULER (aksAutoUpgradeSchedule)
     ############################################################
 CP_MC=$(az aks maintenanceconfiguration show \
         --name aksAutoUpgradeSchedule \
@@ -245,7 +245,7 @@ else
 fi
 
     ############################################################
-    # CLUSTER UPGRADE WINDOW
+    # CLUSTER UPGRADE WINDOW (aksManagedAutoUpgradeSchedule)
     ############################################################
 AUTO_MC=$(az aks maintenanceconfiguration show \
         --name aksManagedAutoUpgradeSchedule \
@@ -265,7 +265,7 @@ else
 fi
 
     ############################################################
-    # 🔥 FIX 2 — NODE SECURITY CHANNEL TYPE
+    # FIX 2 — NODE SECURITY CHANNEL TYPE
     ############################################################
 RAW_NODE=$(az aks show -g "$RG" -n "$CL_NAME" \
            --query "autoUpgradeProfile.nodeOSUpgradeChannel" -o tsv 2>/dev/null)
@@ -281,7 +281,7 @@ case "$RAW_NODE" in
 esac
 
     ############################################################
-    # NODE OS UPGRADE WINDOW
+    # NODE OS UPGRADE WINDOW (aksManagedNodeOSUpgradeSchedule)
     ############################################################
 NODE_MC=$(az aks maintenanceconfiguration show \
         --name aksManagedNodeOSUpgradeSchedule \
@@ -301,7 +301,7 @@ else
 fi
 
     ############################################################
-    # OUTPUT
+    # CLUSTER UPGRADE & SECURITY BLOCK
     ############################################################
 echo "<button class='collapsible'>Cluster Upgrade & Security Schedule</button>
 <div class='content'><pre>
@@ -320,14 +320,38 @@ $NODE_SCHED
 
 
     ############################################################
-    # Remaining sections: Autoscaling, PSA, RBAC, Nodes, Pods, Services, Metrics
+    # AUTOSCALING STATUS (Autoscale vs Manual)
     ############################################################
-
 SCALE=$(az aks nodepool list -g "$RG" --cluster-name "$CL_NAME" -o json \
-      | jq -r '.[] | "\(.name): autoscale=\(.enableAutoScaling), min=\(.minCount), max=\(.maxCount)"')
+  | jq -r '
+      .[] |
+      if .enableAutoScaling == true then
+         "\(.name): autoscale=true,  min=\(.minCount), max=\(.maxCount)"
+      else
+         "\(.name): autoscale=false, count=\(.count)"
+      end
+    ')
 
 echo "<button class='collapsible'>Autoscaling Status – All Node Pools</button>
 <div class='content'><pre>$SCALE</pre></div>" >> "$FINAL_REPORT"
+
+
+    ############################################################
+    # NODE POOL SCALE METHOD FOR NODE LIST
+    ############################################################
+NODEPOOL_METHOD=$(az aks nodepool list -g "$RG" --cluster-name "$CL_NAME" -o json \
+  | jq -r '
+      .[] |
+      if .enableAutoScaling == true then
+          "\(.name): Scale Method = Autoscale (min=\(.minCount), max=\(.maxCount))"
+      else
+          "\(.name): Scale Method = Manual (count=\(.count))"
+      end
+  ')
+
+    ############################################################
+    # PSA / RBAC / NODES / PODS / SERVICES / METRICS
+    ############################################################
 
 PSA=$(kubectl get ns -o json 2>/dev/null | jq -r \
   '.items[] | [.metadata.name,
@@ -355,7 +379,13 @@ $RB2
 
 NODES=$(kubectl get nodes -o wide 2>/dev/null)
 echo "<button class='collapsible'>Node List</button>
-<div class='content'><pre>$NODES</pre></div>" >> "$FINAL_REPORT"
+<div class='content'><pre>" >> "$FINAL_REPORT"
+echo "=== Node Pool Scale Method ===" >> "$FINAL_REPORT"
+echo "$NODEPOOL_METHOD" >> "$FINAL_REPORT"
+echo "" >> "$FINAL_REPORT"
+echo "=== Kubernetes Nodes ===" >> "$FINAL_REPORT"
+echo "$NODES" >> "$FINAL_REPORT"
+echo "</pre></div>" >> "$FINAL_REPORT"
 
 PODS=$(kubectl get pods -A -o wide 2>/dev/null)
 echo "<button class='collapsible'>Pod List</button>
