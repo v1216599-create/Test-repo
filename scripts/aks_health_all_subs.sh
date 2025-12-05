@@ -24,19 +24,24 @@ HTML_HEADER='
 body { font-family: Arial, sans-serif; margin: 20px; background: #eef2f7; }
 h1, h2, h3 { color: #2c3e50; }
 
-.card { background: white; padding: 20px; margin-bottom: 25px;
-border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+.card {
+  background: white; padding: 20px; margin-bottom: 25px;
+  border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+}
 
 table { width: 100%; border-collapse: collapse; margin-top: 15px;
 border-radius: 12px; overflow: hidden; font-size: 15px; }
 
-th { background: #2c3e50; color: white; padding: 12px; text-align: left; }
+th {
+  background: #2c3e50; color: white; padding: 12px; text-align: left;
+}
+
 td {
   padding: 10px;
   border-bottom: 1px solid #e8e8e8;
   vertical-align: top;
-  word-wrap: break-word;
   white-space: normal;
+  word-wrap: break-word;
 }
 
 /* NEW — Green for Healthy Rows */
@@ -62,16 +67,13 @@ td {
 .collapsible:hover { background-color: #2980b9; }
 
 .content {
-  padding: 12px; display: none; border-radius: 6px;
-  border: 1px solid #dcdcdc; background: #fafafa;
+  padding: 12px; display: none;
+  border-radius: 6px; border: 1px solid #dcdcdc; background: #fafafa;
 }
 
 pre {
-  background:#2d3436;
-  color:#dfe6e9;
-  padding:10px;
-  border-radius: 6px;
-  overflow-x:auto;
+  background:#2d3436; color:#dfe6e9;
+  padding:13px; border-radius: 6px; overflow-x:auto; font-size:14px;
 }
 </style>
 
@@ -82,7 +84,7 @@ document.addEventListener("DOMContentLoaded",()=>{
     coll[i].addEventListener("click",function(){
       this.classList.toggle("active");
       var content=this.nextElementSibling;
-      content.style.display=content.style.display==="block"?"none":"block";
+      content.style.display = content.style.display==="block" ? "none" : "block";
     });
   }
 });
@@ -97,7 +99,7 @@ document.addEventListener("DOMContentLoaded",()=>{
 ############################################################
 echo "$HTML_HEADER" > "$FINAL_REPORT"
 
-# NEW — Title matches collapsible styling
+# NEW — Blue title (same as collapsible)
 echo "<div style='background:#3498db;padding:15px;border-radius:6px;margin-bottom:25px;'>
 <h1 style='color:white;margin:0;font-weight:bold;'>AKS Cluster Health – Report</h1>
 </div>" >> "$FINAL_REPORT"
@@ -106,7 +108,7 @@ echo "<div style='background:#3498db;padding:15px;border-radius:6px;margin-botto
 # SUBSCRIPTIONS
 ############################################################
 SUB1="3f499502-898a-4be8-8dc6-0b6260bd0c8c"
-SUB2="yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy"
+SUB2="yyyy-yyyy-yyyy-yyyy-yyyyyyyy"
 
 SUBS=$(az account list --query "[?id=='$SUB1' || id=='$SUB2'].{id:id,name:name}" -o json)
 
@@ -148,37 +150,28 @@ az aks get-credentials -g "$RG" -n "$CLUSTER" --overwrite-existing >/dev/null
 ############################################################
 # BASIC CHECKS
 ############################################################
+
 CLUSTER_VERSION=$(az aks show -g "$RG" -n "$CLUSTER" --query kubernetesVersion -o tsv)
 
-AUTOSCALE=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" \
---query '[0].enableAutoScaling' -o tsv || echo "false")
-
-MIN_COUNT=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" \
---query '[0].minCount' -o tsv || echo "N/A")
-
-MAX_COUNT=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" \
---query '[0].maxCount' -o tsv || echo "N/A")
-
-# All nodepool autoscale info
-NODEPOOL_SCALE=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" \
--o json | jq -r '.[] | "\(.name): autoscale=\(.enableAutoScaling), min=\(.minCount), max=\(.maxCount)"' \
+# Nodepool autoscale info
+NODEPOOL_SCALE=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" -o json \
+| jq -r '.[] | "\(.name): autoscale=\(.enableAutoScaling), min=\(.minCount), max=\(.maxCount)"' \
 | tr '\n' '; ')
+
 [[ -z "$NODEPOOL_SCALE" ]] && NODEPOOL_SCALE="No Node Pools Found"
 
-NODE_NOT_READY=$(kubectl get nodes --no-headers 2>/dev/null | awk '$2!="Ready"{print}' || true)
-POD_CRASH=$(kubectl get pods -A --no-headers 2>/dev/null \
-| awk '$4=="CrashLoopBackOff" || $3=="Error" || $3=="Pending"' || true)
-PVC_FAIL=$(kubectl get pvc -A 2>/dev/null | grep -i failed || true)
+# Node/Pod/PVC health
+NODE_NOT_READY=$(kubectl get nodes --no-headers 2>/dev/null | awk '$2!="Ready" {print}' || true)
+POD_CRASH=$(kubectl get pods -A --no-headers | awk '$4=="CrashLoopBackOff" || $4=="Error" || $4=="Pending"' || true)
+PVC_FAIL=$(kubectl get pvc -A | grep -i failed || true)
 
 [[ -z "$NODE_NOT_READY" ]] && NODE_CLASS="healthy-all" || NODE_CLASS="bad"
 [[ -z "$POD_CRASH" ]] && POD_CLASS="healthy-all" || POD_CLASS="bad"
 [[ -z "$PVC_FAIL" ]] && PVC_CLASS="healthy-all" || PVC_CLASS="bad"
-[[ "$AUTOSCALE" == "true" ]] && AUTO_CLASS="healthy-all" || AUTO_CLASS="warn"
 
 NODE_STATUS=$([[ $NODE_CLASS == "healthy-all" ]] && echo "✓ Healthy" || echo "✗ Issues")
 POD_STATUS=$([[ $POD_CLASS == "healthy-all" ]] && echo "✓ Healthy" || echo "✗ Pod Issues")
 PVC_STATUS=$([[ $PVC_CLASS == "healthy-all" ]] && echo "✓ Healthy" || echo "✗ PVC Failures")
-AUTO_STATUS=$([[ $AUTO_CLASS == "healthy-all" ]] && echo "Enabled (Min:$MIN_COUNT Max:$MAX_COUNT)" || echo "Disabled")
 
 ############################################################
 # SUMMARY TABLE
@@ -191,7 +184,6 @@ echo "<div class='card'>
 <tr class='$NODE_CLASS'><td>Node Health</td><td>$NODE_STATUS</td></tr>
 <tr class='$POD_CLASS'><td>Pod Health</td><td>$POD_STATUS</td></tr>
 <tr class='$PVC_CLASS'><td>PVC Health</td><td>$PVC_STATUS</td></tr>
-<tr class='$AUTO_CLASS'><td>Autoscaling</td><td>$AUTO_STATUS</td></tr>
 
 <tr class='healthy-all'>
 <td>Node Pool Autoscale Status</td>
@@ -207,100 +199,47 @@ echo "<div class='card'>
 # NETWORKING
 ############################################################
 NETWORK_MODEL=$(az aks show -g "$RG" -n "$CLUSTER" --query "networkProfile.networkPlugin" -o tsv)
-API_SERVER=$(kubectl get --raw='/healthz' 2>/dev/null | grep -i ok || echo "FAILED")
-
-AUDIT_LOGS=$(az monitor diagnostic-settings list \
-  --resource "$(az aks show -g "$RG" -n "$CLUSTER" --query id -o tsv)" \
-| jq '(.value // [])[] | select(.logs[]?.category=="kube-apiserver-audit")' | wc -l)
-
-[[ "$AUDIT_LOGS" -gt 0 ]] && AUDIT_STATUS="Enabled" || AUDIT_STATUS="Disabled"
-
-API_LAT=$(kubectl get --raw='/metrics' 2>/dev/null \
-| grep "apiserver_request_duration_seconds_sum" | head -1 || true)
+API_SERVER=$(kubectl get --raw='/healthz' | grep -i ok || echo "FAILED")
 
 echo "<button class='collapsible'>Networking Checks</button>
 <div class='content'><pre>
-Network Model               : $NETWORK_MODEL
-API Server Status           : $API_SERVER
-API Server Audit Logs       : $AUDIT_STATUS
-API Server Latency Metric   : $API_LAT
+Network Model      : $NETWORK_MODEL
+API Server Status  : $API_SERVER
 </pre></div>" >> "$FINAL_REPORT"
 
 ############################################################
-# IDENTITY / ACCESS
+# IDENTITY
 ############################################################
 MANAGED_ID=$(az aks show -g "$RG" -n "$CLUSTER" --query identity.type -o tsv || echo "N/A")
-RBAC_ENABLED=$(az aks show -g "$RG" -n "$CLUSTER" --query enableRBAC -o tsv || echo "N/A")
-AAD_ENABLED=$(az aks show -g "$RG" -n "$CLUSTER" --query "aadProfile" -o json \
-| jq -r 'if . == null then "Disabled" else "Enabled" end')
+RBAC=$(az aks show -g "$RG" -n "$CLUSTER" --query enableRBAC -o tsv || echo "N/A")
 
-SP_ID=$(az aks show -g "$RG" -n "$CLUSTER" \
---query servicePrincipalProfile.clientId -o tsv || echo "N/A")
-
-SP_EXPIRY=$(az ad sp show --id "$SP_ID" \
---query "passwordCredentials[0].endDateTime" -o tsv 2>/dev/null || echo "N/A")
-
-echo "<button class='collapsible'>Identity & Access Checks</button>
+echo "<button class='collapsible'>Identity & Access</button>
 <div class='content'><pre>
-Managed Identity Type       : $MANAGED_ID
-RBAC Enabled                : $RBAC_ENABLED
-AAD Integration             : $AAD_ENABLED
-Service Principal ID        : $SP_ID
-Service Principal Expiry    : $SP_EXPIRY
-</pre></div>
-" >> "$FINAL_REPORT"
+Managed Identity   : $MANAGED_ID
+RBAC Enabled       : $RBAC
+</pre></div>" >> "$FINAL_REPORT"
 
 ############################################################
-# OBSERVABILITY
-############################################################
-METRICS_SERVER=$(kubectl get deployment -n kube-system 2>/dev/null | grep metrics-server || echo "Not Installed")
-PROM=$(kubectl get pods -A 2>/dev/null | grep -i prometheus || echo "Prometheus Not Found")
-GF=$(kubectl get pods -A 2>/dev/null | grep -i grafana || echo "Grafana Not Found")
-LOGS_FLOW=$(kubectl logs -n kube-system -l k8s-app=kubelet 2>/dev/null || echo "No kubelet logs")
-
-echo "<button class='collapsible'>Observability Checks</button>
-<div class='content'><pre>
-Metrics Server              : $METRICS_SERVER
-Kubelet Logs                : $LOGS_FLOW
-Prometheus                  : $PROM
-Grafana                     : $GF
-</pre></div>
-" >> "$FINAL_REPORT"
-
-############################################################
-# SECURITY
-############################################################
-PSA=$(kubectl get podsecurityadmissions.config.openshift.io 2>/dev/null || echo "N/A")
-
-SECRETS_ENC=$(az aks show -g "$RG" -n "$CLUSTER" \
---query 'securityProfile.enableSecretsEncryption' -o tsv 2>/dev/null || echo "N/A")
-
-DEFENDER=$(az security pricing show --name KubernetesService \
---query pricingTier -o tsv 2>/dev/null || echo "Not Registered")
-
-TLS=$(az aks show -g "$RG" -n "$CLUSTER" \
---query apiServerAccessProfile.enablePrivateCluster -o tsv || echo "N/A")
-
-IMG_SCAN=$(az security setting show --name "MCAS" --query status -o tsv 2>/dev/null || echo "N/A")
-
-echo "<button class='collapsible'>Security Checks</button>
-<div class='content'><pre>
-Pod Security Admission      : $PSA
-Secrets Encryption          : $SECRETS_ENC
-Azure Defender Enabled      : $DEFENDER
-TLS Enforcement             : $TLS
-Image Scanning              : $IMG_SCAN
-</pre></div>
-" >> "$FINAL_REPORT"
-
-############################################################
-# NODE LIST  (ROLES REMOVED)
+# NODE LIST (ROLES REMOVED + PERFECT ALIGNMENT)
 ############################################################
 echo "<button class='collapsible'>Node List</button>
 <div class='content'><pre>" >> "$FINAL_REPORT"
 
-# Remove ROLES column → skip column 3
-kubectl get nodes -o wide | awk '{$3=""; print}' | column -t >> "$FINAL_REPORT"
+kubectl get nodes -o json | jq -r '
+[
+  "NAME","STATUS","AGE","VERSION","INTERNAL-IP","EXTERNAL-IP","OS-IMAGE","KERNEL","CONTAINER-RUNTIME"
+],
+(.items[] | [
+  .metadata.name,
+  (.status.conditions[] | select(.type=="Ready") | if .status=="True" then "Ready" else "NotReady" end),
+  (.metadata.creationTimestamp),
+  .status.nodeInfo.kubeletVersion,
+  (.status.addresses[] | select(.type=="InternalIP") | .address),
+  (.status.addresses[] | select(.type=="ExternalIP") | .address // "none"),
+  .status.nodeInfo.osImage,
+  .status.nodeInfo.kernelVersion,
+  .status.nodeInfo.containerRuntimeVersion
+]) | @tsv' | column -t >> "$FINAL_REPORT"
 
 echo "</pre></div>" >> "$FINAL_REPORT"
 
@@ -309,28 +248,28 @@ echo "</pre></div>" >> "$FINAL_REPORT"
 ############################################################
 echo "<button class='collapsible'>Pod List</button>
 <div class='content'><pre>" >> "$FINAL_REPORT"
+
 kubectl get pods -A -o wide | column -t >> "$FINAL_REPORT"
+
 echo "</pre></div>" >> "$FINAL_REPORT"
 
 ############################################################
-# SERVICES LIST
+# SERVICES
 ############################################################
-echo "<button class='collapsible'>Services List</button>
+echo "<button class='collapsible'>Services</button>
 <div class='content'><pre>" >> "$FINAL_REPORT"
+
 kubectl get svc -A -o wide | column -t >> "$FINAL_REPORT"
+
 echo "</pre></div>" >> "$FINAL_REPORT"
 
 ############################################################
 # POD CPU / MEM
 ############################################################
-echo "<button class='collapsible'>Pod CPU / Memory Usage</button>
+echo "<button class='collapsible'>Pod CPU & Memory</button>
 <div class='content'><pre>" >> "$FINAL_REPORT"
 
-if kubectl top pods -A &>/dev/null; then
-    kubectl top pods -A | column -t >> "$FINAL_REPORT"
-else
-    echo "Metrics not available" >> "$FINAL_REPORT"
-fi
+kubectl top pods -A 2>/dev/null | column -t || echo "Metrics Not Available"
 
 echo "</pre></div>" >> "$FINAL_REPORT"
 
