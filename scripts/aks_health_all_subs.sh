@@ -15,31 +15,23 @@ FINAL_REPORT="$REPORT_DIR/AKS Cluster Health.html"
 # FORMAT DATE LIKE AZURE PORTAL
 ############################################################
 format_schedule() {
-  local start="$1"   # full string: "2025-12-06 00:00 +00:00"
-  local freq="$2"    # e.g. "Weekly"
-  local days="$3"    # e.g. "Sunday"
+  local start="$1"   # format: YYYY-MM-DD 00:00 +00:00
+  local freq="$2"    # Weekly
+  local days="$3"    # Sunday
 
   if [[ -z "$start" || "$start" == "null" ]]; then
     echo "Not Configured"
     return 0
   fi
 
-  local formatted
   if formatted=$(date -d "$start" '+%a %b %d %Y %H:%M %z (Coordinated Universal Time)' 2>/dev/null); then
     formatted="${formatted/%+0000/+00:00}"
   else
     formatted="$start"
   fi
 
-  local repeats=""
-  if [[ "$freq" == "Weekly" && -n "$days" ]]; then
-    repeats="Every week on $days"
-  elif [[ -n "$freq" && -n "$days" ]]; then
-    repeats="$freq on $days"
-  fi
-
-  if [[ -n "$repeats" ]]; then
-    echo -e "Start On : $formatted\nRepeats  : $repeats"
+  if [[ -n "$freq" && -n "$days" ]]; then
+    echo -e "Start On : $formatted\nRepeats  : Every week on $days"
   else
     echo "Start On : $formatted"
   fi
@@ -56,23 +48,21 @@ HTML_HEADER='
 <style>
 body { font-family: Arial; background:#eef2f7; margin:20px; }
 h1 { color:white; }
-.card { background:white; padding:20px; margin-bottom:25px; border-radius:12px;
-        box-shadow:0 4px 12px rgba(0,0,0,0.08); }
+.card { background:white; padding:20px; margin-bottom:25px;
+        border-radius:12px; box-shadow:0 4px 12px rgba(0,0,0,0.08); }
 
 table { width:100%; border-collapse:collapse; margin-top:15px; border-radius:12px;
         overflow:hidden; font-size:15px; }
-
 th { background:#2c3e50; color:white; padding:12px; text-align:left; }
-td { padding:10px; border-bottom:1px solid #e8e8e8; }
+td { padding:10px; border-bottom:1px solid #eee; }
 
 .healthy-all { background:#c8f7c5 !important; color:#145a32 !important; font-weight:bold; }
 .version-ok  { background:#c8f7c5 !important; color:#145a32 !important; font-weight:bold; }
 
 .collapsible {
-  background:#3498db; color:white; cursor:pointer;
-  padding:12px; width:100%; font-size:16px;
-  border-radius:6px; text-align:left; margin-top:12px;
-}
+  background:#3498db; color:white; cursor:pointer; padding:12px;
+  width:100%; border-radius:6px; font-size:16px; text-align:left;
+  margin-top:12px; }
 .collapsible:hover { background:#2980b9; }
 
 .content { padding:12px; display:none; border:1px solid #ccc;
@@ -83,11 +73,11 @@ pre { background:#2d3436; color:#dfe6e9; padding:10px; border-radius:6px; overfl
 
 <script>
 document.addEventListener("DOMContentLoaded",()=>{
-  var coll=document.getElementsByClassName("collapsible");
-  for(let i=0;i<coll.length;i++){
-    coll[i].addEventListener("click",function(){
-      var c=this.nextElementSibling;
-      c.style.display = (c.style.display==="block"?"none":"block");
+  var c=document.getElementsByClassName("collapsible");
+  for(let i=0;i<c.length;i++){
+    c[i].addEventListener("click",function(){
+      var e=this.nextElementSibling;
+      e.style.display = (e.style.display==="block"?"none":"block");
     });
   }
 });
@@ -106,10 +96,9 @@ echo "<div style='background:#3498db;padding:15px;border-radius:6px;'>
 <h1>AKS Cluster Health – Report</h1></div>" >> "$FINAL_REPORT"
 
 ############################################################
-# SUBSCRIPTIONS
+# SUBSCRIPTION LIST
 ############################################################
 SUB1="3f499502-898a-4be8-8dc6-0b6260bd0c8c"
-
 SUBS=$(az account list --query "[?id=='$SUB1'].{id:id,name:name}" -o json)
 
 ############################################################
@@ -138,7 +127,7 @@ for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
   ############################################################
   for cluster in $(echo "$CLUSTERS" | jq -r '.[] | @base64'); do
 
-    set +e   # don't fail the whole job on one cluster
+    set +e  # prevent failures
 
     pullc(){ echo "$cluster" | base64 --decode | jq -r "$1"; }
 
@@ -170,65 +159,104 @@ for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
 </table></div>" >> "$FINAL_REPORT"
 
     ############################################################
-    # CLUSTER UPGRADE & SECURITY SCHEDULE (CORRECT FIELDS)
+    # MAPPING-BASED AUTOMATIC UPGRADE MODE (PORTAL MATCH)
     ############################################################
 
-    # ---- Automatic upgrade mode (autoUpgradeChannel) ----
-    AUTO_TYPE=$(az aks show -g "$RG" -n "$CL_NAME" --query "autoUpgradeChannel" -o tsv 2>/dev/null)
-    [[ -z "$AUTO_TYPE" ]] && AUTO_TYPE=$(az aks show -g "$RG" -n "$CL_NAME" --query "properties.autoUpgradeChannel" -o tsv 2>/dev/null)
-    [[ -z "$AUTO_TYPE" || "$AUTO_TYPE" == "none" || "$AUTO_TYPE" == "None" ]] && AUTO_TYPE="Disabled"
+    RAW_AUTO=$(az aks show -g "$RG" -n "$CL_NAME" --query "autoUpgradeChannel" -o tsv 2>/dev/null)
 
-    # ---- Automatic upgrade schedule (maintenanceconfiguration: aksManagedAutoUpgradeSchedule) ----
-    AUTO_MC=$(az aks maintenanceconfiguration show -g "$RG" --cluster-name "$CL_NAME" --name aksManagedAutoUpgradeSchedule -o json 2>/dev/null)
+    case "$RAW_AUTO" in
+      patch)
+        AUTO_TYPE="Enabled with patch (recommended)"
+        ;;
+      stable)
+        AUTO_TYPE="Enabled with stable"
+        ;;
+      rapid)
+        AUTO_TYPE="Enabled with rapid"
+        ;;
+      nodeimage|node-image)
+        AUTO_TYPE="Enabled with node image"
+        ;;
+      none|"")
+        AUTO_TYPE="Disabled"
+        ;;
+      *)
+        AUTO_TYPE="Disabled"
+        ;;
+    esac
 
-    AUTO_START_STR=""
+    ############################################################
+    # MAINTENANCE CONFIG (AUTO UPGRADE)
+    ############################################################
+    AUTO_MC=$(az aks maintenanceconfiguration show \
+        --name aksManagedAutoUpgradeSchedule \
+        -g "$RG" \
+        --cluster-name "$CL_NAME" -o json 2>/dev/null)
+
     if [[ -n "$AUTO_MC" ]]; then
-      AUTO_DATE=$(echo "$AUTO_MC" | jq -r '.maintenanceWindow.startDate // empty')
-      AUTO_TIME=$(echo "$AUTO_MC" | jq -r '.maintenanceWindow.startTime // "00:00"' )
-      AUTO_UTC=$(echo "$AUTO_MC"  | jq -r '.maintenanceWindow.utcOffset // "+00:00"' )
-      AUTO_DOW=$(echo "$AUTO_MC"  | jq -r '.maintenanceWindow.schedule.weekly.dayOfWeek // empty')
-      AUTO_INT=$(echo "$AUTO_MC"  | jq -r '.maintenanceWindow.schedule.weekly.intervalWeeks // empty')
+      AD=$(echo "$AUTO_MC" | jq -r '.maintenanceWindow.startDate // empty')
+      AT=$(echo "$AUTO_MC" | jq -r '.maintenanceWindow.startTime // "00:00"')
+      AU=$(echo "$AUTO_MC" | jq -r '.maintenanceWindow.utcOffset // "+00:00"')
+      AW=$(echo "$AUTO_MC" | jq -r '.maintenanceWindow.schedule.weekly.dayOfWeek // empty')
+      AS="$AD $AT $AU"
 
-      if [[ -n "$AUTO_DATE" ]]; then
-        AUTO_START_STR="$AUTO_DATE $AUTO_TIME $AUTO_UTC"
-        AUTO_FREQ=""
-        [[ -n "$AUTO_INT" ]] && AUTO_FREQ="Weekly"
-        AUTO_SCHED=$(format_schedule "$AUTO_START_STR" "$AUTO_FREQ" "$AUTO_DOW")
-      else
-        AUTO_SCHED="Not Configured"
-      fi
+      AUTO_SCHED=$(format_schedule "$AS" "Weekly" "$AW")
     else
       AUTO_SCHED="Not Configured"
     fi
 
-    # ---- Node security channel type (nodeOsUpgradeChannel) ----
-    NODE_TYPE=$(az aks show -g "$RG" -n "$CL_NAME" --query "nodeOsUpgradeChannel" -o tsv 2>/dev/null)
-    [[ -z "$NODE_TYPE" ]] && NODE_TYPE=$(az aks show -g "$RG" -n "$CL_NAME" --query "properties.nodeOsUpgradeChannel" -o tsv 2>/dev/null)
-    [[ -z "$NODE_TYPE" || "$NODE_TYPE" == "null" ]] && NODE_TYPE="Not Configured"
+    ############################################################
+    # NODE OS UPGRADE CHANNEL (PORTAL MAPPING)
+    ############################################################
+    RAW_NODE=$(az aks show -g "$RG" -n "$CL_NAME" --query "nodeOsUpgradeChannel" -o tsv 2>/dev/null)
 
-    # ---- Node security channel schedule (maintenanceconfiguration: aksManagedNodeOSUpgradeSchedule) ----
-    NODE_MC=$(az aks maintenanceconfiguration show -g "$RG" --cluster-name "$CL_NAME" --name aksManagedNodeOSUpgradeSchedule -o json 2>/dev/null)
+    case "$RAW_NODE" in
+      NodeImage)
+        NODE_TYPE="Node Image"
+        ;;
+      SecurityPatch)
+        NODE_TYPE="Security Patch"
+        ;;
+      Rapid)
+        NODE_TYPE="Rapid"
+        ;;
+      Stable)
+        NODE_TYPE="Stable"
+        ;;
+      Patch)
+        NODE_TYPE="Patch"
+        ;;
+      ""|null)
+        NODE_TYPE="Unmanaged"
+        ;;
+      *)
+        NODE_TYPE="Unmanaged"
+        ;;
+    esac
 
-    NODE_START_STR=""
+    ############################################################
+    # MAINTENANCE CONFIG (NODE OS UPGRADE)
+    ############################################################
+    NODE_MC=$(az aks maintenanceconfiguration show \
+        --name aksManagedNodeOSUpgradeSchedule \
+        -g "$RG" \
+        --cluster-name "$CL_NAME" -o json 2>/dev/null)
+
     if [[ -n "$NODE_MC" ]]; then
-      NODE_DATE=$(echo "$NODE_MC" | jq -r '.maintenanceWindow.startDate // empty')
-      NODE_TIME=$(echo "$NODE_MC" | jq -r '.maintenanceWindow.startTime // "00:00"' )
-      NODE_UTC=$(echo "$NODE_MC"  | jq -r '.maintenanceWindow.utcOffset // "+00:00"' )
-      NODE_DOW=$(echo "$NODE_MC"  | jq -r '.maintenanceWindow.schedule.weekly.dayOfWeek // empty')
-      NODE_INT=$(echo "$NODE_MC"  | jq -r '.maintenanceWindow.schedule.weekly.intervalWeeks // empty')
+      ND=$(echo "$NODE_MC" | jq -r '.maintenanceWindow.startDate // empty')
+      NT=$(echo "$NODE_MC" | jq -r '.maintenanceWindow.startTime // "00:00"')
+      NU=$(echo "$NODE_MC" | jq -r '.maintenanceWindow.utcOffset // "+00:00"')
+      NW=$(echo "$NODE_MC" | jq -r '.maintenanceWindow.schedule.weekly.dayOfWeek // empty')
+      NS="$ND $NT $NU"
 
-      if [[ -n "$NODE_DATE" ]]; then
-        NODE_START_STR="$NODE_DATE $NODE_TIME $NODE_UTC"
-        NODE_FREQ=""
-        [[ -n "$NODE_INT" ]] && NODE_FREQ="Weekly"
-        NODE_SCHED=$(format_schedule "$NODE_START_STR" "$NODE_FREQ" "$NODE_DOW")
-      else
-        NODE_SCHED="Not Configured"
-      fi
+      NODE_SCHED=$(format_schedule "$NS" "Weekly" "$NW")
     else
       NODE_SCHED="Not Configured"
     fi
 
+    ############################################################
+    # OUTPUT BLOCK
+    ############################################################
     echo "<button class='collapsible'>Cluster Upgrade & Security Schedule</button>
 <div class='content'><pre>
 Automatic Upgrade Mode     : $AUTO_TYPE
@@ -241,20 +269,17 @@ $NODE_SCHED
 </pre></div>" >> "$FINAL_REPORT"
 
     ############################################################
-    # AUTOSCALING
+    # AUTOSCALING / PSA / RBAC / NODES / PODS / SERVICES / METRICS
     ############################################################
+
     SCALE=$(az aks nodepool list -g "$RG" --cluster-name "$CL_NAME" -o json \
       | jq -r '.[] | "\(.name): autoscale=\(.enableAutoScaling), min=\(.minCount), max=\(.maxCount)"')
 
     echo "<button class='collapsible'>Autoscaling Status – All Node Pools</button>
 <div class='content'><pre>$SCALE</pre></div>" >> "$FINAL_REPORT"
 
-    ############################################################
-    # PSA
-    ############################################################
     PSA=$(kubectl get ns -o json 2>/dev/null | jq -r \
-      '.items[] |
-      [.metadata.name,
+      '.items[] | [.metadata.name,
        (.metadata.labels["pod-security.kubernetes.io/enforce"] // "none"),
        (.metadata.labels["pod-security.kubernetes.io/audit"] // "none"),
        (.metadata.labels["pod-security.kubernetes.io/warn"] // "none")] | @tsv')
@@ -265,9 +290,6 @@ NAMESPACE    ENFORCE    AUDIT    WARN
 $PSA
 </pre></div>" >> "$FINAL_REPORT"
 
-    ############################################################
-    # RBAC
-    ############################################################
     RB1=$(kubectl get rolebindings -A -o wide 2>/dev/null)
     RB2=$(kubectl get clusterrolebindings -o wide 2>/dev/null)
 
@@ -280,9 +302,6 @@ ClusterRoleBindings:
 $RB2
 </pre></div>" >> "$FINAL_REPORT"
 
-    ############################################################
-    # Nodes / Pods / Services
-    ############################################################
     NODES=$(kubectl get nodes -o wide 2>/dev/null)
     PODS=$(kubectl get pods -A -o wide 2>/dev/null)
     SERVICES=$(kubectl get svc -A -o wide 2>/dev/null)
@@ -296,26 +315,18 @@ $RB2
     echo "<button class='collapsible'>Services List</button>
 <div class='content'><pre>$SERVICES</pre></div>" >> "$FINAL_REPORT"
 
-    ############################################################
-    # METRICS
-    ############################################################
     METRICS=$(kubectl top pods -A 2>/dev/null || echo "Metrics Not Available")
 
     echo "<button class='collapsible'>Pod CPU/Memory Usage</button>
 <div class='content'><pre>$METRICS</pre></div>" >> "$FINAL_REPORT"
 
-    # restore strict mode for next cluster's setup section
     set -e
-
-  done  # cluster loop
+  done
 
   echo "</div>" >> "$FINAL_REPORT"
 
-done  # subscription loop
+done
 
-############################################################
-# END REPORT
-############################################################
 echo "</body></html>" >> "$FINAL_REPORT"
 
 echo "===================================================="
