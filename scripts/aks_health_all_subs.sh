@@ -18,7 +18,7 @@ FINAL_REPORT="$REPORT_DIR/AKS Cluster Health.html"
 HTML_HEADER='
 <html>
 <head>
-<title>AKS Cluster Health</title>
+<title>AKS Cluster Health – Report</title>
 
 <style>
 body { font-family: Arial, sans-serif; margin: 20px; background: #eef2f7; }
@@ -39,31 +39,43 @@ td {
   white-space: normal;
 }
 
-/* NEW — Green for Healthy Rows */
+/* Healthy green rows */
 .healthy-all {
   background:#c8f7c5 !important;
   color:#145a32 !important;
   font-weight:bold;
 }
 
-/* Dark Green Version Row */
+/* Cluster Version row green */
 .version-ok {
   background:#c8f7c5 !important;
   color:#145a32 !important;
   font-weight:bold;
 }
 
+/* Collapsible buttons */
 .collapsible {
-  background-color: #3498db; color: white; cursor: pointer;
-  padding: 12px; width: 100%; border: none; outline: none;
-  font-size: 16px; border-radius: 6px; margin-top: 12px; text-align:left;
+  background-color: #3498db;
+  color: white;
+  cursor: pointer;
+  padding: 12px;
+  width: 100%;
+  border: none;
+  outline: none;
+  font-size: 16px;
+  border-radius: 6px;
+  margin-top: 12px;
+  text-align:left;
 }
 
 .collapsible:hover { background-color: #2980b9; }
 
 .content {
-  padding: 12px; display: none; border-radius: 6px;
-  border: 1px solid #dcdcdc; background: #fafafa;
+  padding: 12px;
+  display: none;
+  border-radius: 6px;
+  border: 1px solid #dcdcdc;
+  background: #fafafa;
 }
 
 pre {
@@ -97,9 +109,14 @@ document.addEventListener("DOMContentLoaded",()=>{
 ############################################################
 echo "$HTML_HEADER" > "$FINAL_REPORT"
 
-# NEW — Title matches collapsible styling
+# TITLE (Blue Background)
 echo "<div style='background:#3498db;padding:15px;border-radius:6px;margin-bottom:25px;'>
 <h1 style='color:white;margin:0;font-weight:bold;'>AKS Cluster Health – Report</h1>
+</div>" >> "$FINAL_REPORT"
+
+# BLUE HEADER FOR SELECTED SUBSCRIPTIONS
+echo "<div style='background:#3498db;padding:10px;border-radius:6px;margin-bottom:20px;'>
+<h2 style='color:white;margin:0;'>Selected Subscriptions</h2>
 </div>" >> "$FINAL_REPORT"
 
 ############################################################
@@ -159,15 +176,13 @@ MIN_COUNT=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" \
 MAX_COUNT=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" \
 --query '[0].maxCount' -o tsv || echo "N/A")
 
-# All nodepool autoscale info
 NODEPOOL_SCALE=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" \
 -o json | jq -r '.[] | "\(.name): autoscale=\(.enableAutoScaling), min=\(.minCount), max=\(.maxCount)"' \
 | tr '\n' '; ')
 [[ -z "$NODEPOOL_SCALE" ]] && NODEPOOL_SCALE="No Node Pools Found"
 
 NODE_NOT_READY=$(kubectl get nodes --no-headers 2>/dev/null | awk '$2!="Ready"{print}' || true)
-POD_CRASH=$(kubectl get pods -A --no-headers 2>/dev/null \
-| awk '$4=="CrashLoopBackOff" || $3=="Error" || $3=="Pending"' || true)
+POD_CRASH=$(kubectl get pods -A --no-headers 2>/dev/null | awk '$4=="CrashLoopBackOff" || $3=="Error" || $3=="Pending"' || true)
 PVC_FAIL=$(kubectl get pvc -A 2>/dev/null | grep -i failed || true)
 
 [[ -z "$NODE_NOT_READY" ]] && NODE_CLASS="healthy-all" || NODE_CLASS="bad"
@@ -204,9 +219,16 @@ echo "<div class='card'>
 " >> "$FINAL_REPORT"
 
 ############################################################
+# NEW — AUTOSCALING DETAILS COLLAPSIBLE
+############################################################
+echo "<button class='collapsible'>Autoscaling Status – All Node Pools</button>
+<div class='content'><pre>$NODEPOOL_SCALE</pre></div>" >> "$FINAL_REPORT"
+
+############################################################
 # NETWORKING
 ############################################################
 NETWORK_MODEL=$(az aks show -g "$RG" -n "$CLUSTER" --query "networkProfile.networkPlugin" -o tsv)
+
 API_SERVER=$(kubectl get --raw='/healthz' 2>/dev/null | grep -i ok || echo "FAILED")
 
 AUDIT_LOGS=$(az monitor diagnostic-settings list \
@@ -215,30 +237,25 @@ AUDIT_LOGS=$(az monitor diagnostic-settings list \
 
 [[ "$AUDIT_LOGS" -gt 0 ]] && AUDIT_STATUS="Enabled" || AUDIT_STATUS="Disabled"
 
-API_LAT=$(kubectl get --raw='/metrics' 2>/dev/null \
-| grep "apiserver_request_duration_seconds_sum" | head -1 || true)
-
 echo "<button class='collapsible'>Networking Checks</button>
 <div class='content'><pre>
 Network Model               : $NETWORK_MODEL
 API Server Status           : $API_SERVER
 API Server Audit Logs       : $AUDIT_STATUS
-API Server Latency Metric   : $API_LAT
 </pre></div>" >> "$FINAL_REPORT"
 
 ############################################################
-# IDENTITY / ACCESS
+# IDENTITY & ACCESS
 ############################################################
 MANAGED_ID=$(az aks show -g "$RG" -n "$CLUSTER" --query identity.type -o tsv || echo "N/A")
+
 RBAC_ENABLED=$(az aks show -g "$RG" -n "$CLUSTER" --query enableRBAC -o tsv || echo "N/A")
+
 AAD_ENABLED=$(az aks show -g "$RG" -n "$CLUSTER" --query "aadProfile" -o json \
 | jq -r 'if . == null then "Disabled" else "Enabled" end')
 
 SP_ID=$(az aks show -g "$RG" -n "$CLUSTER" \
 --query servicePrincipalProfile.clientId -o tsv || echo "N/A")
-
-SP_EXPIRY=$(az ad sp show --id "$SP_ID" \
---query "passwordCredentials[0].endDateTime" -o tsv 2>/dev/null || echo "N/A")
 
 echo "<button class='collapsible'>Identity & Access Checks</button>
 <div class='content'><pre>
@@ -246,60 +263,27 @@ Managed Identity Type       : $MANAGED_ID
 RBAC Enabled                : $RBAC_ENABLED
 AAD Integration             : $AAD_ENABLED
 Service Principal ID        : $SP_ID
-Service Principal Expiry    : $SP_EXPIRY
-</pre></div>
-" >> "$FINAL_REPORT"
-
-############################################################
-# OBSERVABILITY
-############################################################
-METRICS_SERVER=$(kubectl get deployment -n kube-system 2>/dev/null | grep metrics-server || echo "Not Installed")
-PROM=$(kubectl get pods -A 2>/dev/null | grep -i prometheus || echo "Prometheus Not Found")
-GF=$(kubectl get pods -A 2>/dev/null | grep -i grafana || echo "Grafana Not Found")
-LOGS_FLOW=$(kubectl logs -n kube-system -l k8s-app=kubelet 2>/dev/null || echo "No kubelet logs")
-
-echo "<button class='collapsible'>Observability Checks</button>
-<div class='content'><pre>
-Metrics Server              : $METRICS_SERVER
-Kubelet Logs                : $LOGS_FLOW
-Prometheus                  : $PROM
-Grafana                     : $GF
 </pre></div>
 " >> "$FINAL_REPORT"
 
 ############################################################
 # SECURITY
 ############################################################
-PSA=$(kubectl get podsecurityadmissions.config.openshift.io 2>/dev/null || echo "N/A")
-
 SECRETS_ENC=$(az aks show -g "$RG" -n "$CLUSTER" \
 --query 'securityProfile.enableSecretsEncryption' -o tsv 2>/dev/null || echo "N/A")
 
-DEFENDER=$(az security pricing show --name KubernetesService \
---query pricingTier -o tsv 2>/dev/null || echo "Not Registered")
-
-TLS=$(az aks show -g "$RG" -n "$CLUSTER" \
---query apiServerAccessProfile.enablePrivateCluster -o tsv || echo "N/A")
-
-IMG_SCAN=$(az security setting show --name "MCAS" --query status -o tsv 2>/dev/null || echo "N/A")
-
 echo "<button class='collapsible'>Security Checks</button>
 <div class='content'><pre>
-Pod Security Admission      : $PSA
 Secrets Encryption          : $SECRETS_ENC
-Azure Defender Enabled      : $DEFENDER
-TLS Enforcement             : $TLS
-Image Scanning              : $IMG_SCAN
 </pre></div>
 " >> "$FINAL_REPORT"
 
 ############################################################
-# NODE LIST  (ROLES REMOVED)
+# NODE LIST (ROLES REMOVED)
 ############################################################
 echo "<button class='collapsible'>Node List</button>
 <div class='content'><pre>" >> "$FINAL_REPORT"
 
-# Remove ROLES column → skip column 3
 kubectl get nodes -o wide | awk '{$3=""; print}' | column -t >> "$FINAL_REPORT"
 
 echo "</pre></div>" >> "$FINAL_REPORT"
@@ -345,3 +329,4 @@ echo "===================================================="
 echo "AKS HTML Report Generated Successfully"
 echo "Saved at: $FINAL_REPORT"
 echo "===================================================="
+
