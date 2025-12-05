@@ -15,9 +15,9 @@ FINAL_REPORT="$REPORT_DIR/AKS Cluster Health.html"
 # FORMAT DATE LIKE AZURE PORTAL
 ############################################################
 format_schedule() {
-  local start="$1"
-  local freq="$2"
-  local days="$3"
+  local start="$1"   # full string: "2025-12-06 00:00 +00:00"
+  local freq="$2"    # e.g. "Weekly"
+  local days="$3"    # e.g. "Sunday"
 
   if [[ -z "$start" || "$start" == "null" ]]; then
     echo "Not Configured"
@@ -66,7 +66,7 @@ th { background:#2c3e50; color:white; padding:12px; text-align:left; }
 td { padding:10px; border-bottom:1px solid #e8e8e8; }
 
 .healthy-all { background:#c8f7c5 !important; color:#145a32 !important; font-weight:bold; }
-.version-ok { background:#c8f7c5 !important; color:#145a32 !important; font-weight:bold; }
+.version-ok  { background:#c8f7c5 !important; color:#145a32 !important; font-weight:bold; }
 
 .collapsible {
   background:#3498db; color:white; cursor:pointer;
@@ -75,7 +75,7 @@ td { padding:10px; border-bottom:1px solid #e8e8e8; }
 }
 .collapsible:hover { background:#2980b9; }
 
-.content { padding:12px; display:none; border:1px solid #ccc; 
+.content { padding:12px; display:none; border:1px solid #ccc;
            border-radius:6px; background:#fafafa; }
 
 pre { background:#2d3436; color:#dfe6e9; padding:10px; border-radius:6px; overflow-x:auto; }
@@ -138,8 +138,7 @@ for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
   ############################################################
   for cluster in $(echo "$CLUSTERS" | jq -r '.[] | @base64'); do
 
-    # ⛔ AVOID FAILING SCRIPT
-    set +e
+    set +e   # don't fail the whole job on one cluster
 
     pullc(){ echo "$cluster" | base64 --decode | jq -r "$1"; }
 
@@ -157,8 +156,8 @@ for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
     PVC_ERR=$(kubectl get pvc -A 2>/dev/null | grep -i failed)
 
     [[ -z "$NODE_ERR" ]] && NC="healthy-all" || NC="bad"
-    [[ -z "$POD_ERR" ]] && PC="healthy-all" || PC="bad"
-    [[ -z "$PVC_ERR" ]] && PVC="healthy-all" || PVC="bad"
+    [[ -z "$POD_ERR"  ]] && PC="healthy-all" || PC="bad"
+    [[ -z "$PVC_ERR"  ]] && PVC="healthy-all" || PVC="bad"
 
     echo "<div class='card'>
 <h3>Cluster: $CL_NAME</h3>
@@ -171,44 +170,65 @@ for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
 </table></div>" >> "$FINAL_REPORT"
 
     ############################################################
-    # 🚀 CORRECT AKS PLANNED UPDATES FIELDS
+    # CLUSTER UPGRADE & SECURITY SCHEDULE (CORRECT FIELDS)
     ############################################################
 
-    ######## AUTOMATIC UPGRADE MODE ########
-    AUTO_TYPE=$(az aks show -g "$RG" -n "$CL_NAME" \
-      --query "autoUpgradeProfile.upgradeChannel" -o tsv)
-    [[ -z "$AUTO_TYPE" || "$AUTO_TYPE" == "null" ]] && AUTO_TYPE="Disabled"
+    # ---- Automatic upgrade mode (autoUpgradeChannel) ----
+    AUTO_TYPE=$(az aks show -g "$RG" -n "$CL_NAME" --query "autoUpgradeChannel" -o tsv 2>/dev/null)
+    [[ -z "$AUTO_TYPE" ]] && AUTO_TYPE=$(az aks show -g "$RG" -n "$CL_NAME" --query "properties.autoUpgradeChannel" -o tsv 2>/dev/null)
+    [[ -z "$AUTO_TYPE" || "$AUTO_TYPE" == "none" || "$AUTO_TYPE" == "None" ]] && AUTO_TYPE="Disabled"
 
-    ######## AUTOMATIC UPGRADE SCHEDULE ########
-    AUTO_START=$(az aks show -g "$RG" -n "$CL_NAME" \
-      --query "autoUpgradeProfile.maintenanceWindow.schedule.startDate" -o tsv)
+    # ---- Automatic upgrade schedule (maintenanceconfiguration: aksManagedAutoUpgradeSchedule) ----
+    AUTO_MC=$(az aks maintenanceconfiguration show -g "$RG" --cluster-name "$CL_NAME" --name aksManagedAutoUpgradeSchedule -o json 2>/dev/null)
 
-    AUTO_FREQ=$(az aks show -g "$RG" -n "$CL_NAME" \
-      --query "autoUpgradeProfile.maintenanceWindow.schedule.frequency" -o tsv)
+    AUTO_START_STR=""
+    if [[ -n "$AUTO_MC" ]]; then
+      AUTO_DATE=$(echo "$AUTO_MC" | jq -r '.maintenanceWindow.startDate // empty')
+      AUTO_TIME=$(echo "$AUTO_MC" | jq -r '.maintenanceWindow.startTime // "00:00"' )
+      AUTO_UTC=$(echo "$AUTO_MC"  | jq -r '.maintenanceWindow.utcOffset // "+00:00"' )
+      AUTO_DOW=$(echo "$AUTO_MC"  | jq -r '.maintenanceWindow.schedule.weekly.dayOfWeek // empty')
+      AUTO_INT=$(echo "$AUTO_MC"  | jq -r '.maintenanceWindow.schedule.weekly.intervalWeeks // empty')
 
-    AUTO_DAYS=$(az aks show -g "$RG" -n "$CL_NAME" \
-      --query "autoUpgradeProfile.maintenanceWindow.schedule.weekDays | join(', ', @)" -o tsv)
+      if [[ -n "$AUTO_DATE" ]]; then
+        AUTO_START_STR="$AUTO_DATE $AUTO_TIME $AUTO_UTC"
+        AUTO_FREQ=""
+        [[ -n "$AUTO_INT" ]] && AUTO_FREQ="Weekly"
+        AUTO_SCHED=$(format_schedule "$AUTO_START_STR" "$AUTO_FREQ" "$AUTO_DOW")
+      else
+        AUTO_SCHED="Not Configured"
+      fi
+    else
+      AUTO_SCHED="Not Configured"
+    fi
 
-    AUTO_SCHED=$(format_schedule "$AUTO_START" "$AUTO_FREQ" "$AUTO_DAYS")
-
-    ######## NODE SECURITY CHANNEL TYPE ########
-    NODE_TYPE=$(az aks show -g "$RG" -n "$CL_NAME" \
-      --query "nodeOsUpgradeProfile.upgradeChannel" -o tsv)
+    # ---- Node security channel type (nodeOsUpgradeChannel) ----
+    NODE_TYPE=$(az aks show -g "$RG" -n "$CL_NAME" --query "nodeOsUpgradeChannel" -o tsv 2>/dev/null)
+    [[ -z "$NODE_TYPE" ]] && NODE_TYPE=$(az aks show -g "$RG" -n "$CL_NAME" --query "properties.nodeOsUpgradeChannel" -o tsv 2>/dev/null)
     [[ -z "$NODE_TYPE" || "$NODE_TYPE" == "null" ]] && NODE_TYPE="Not Configured"
 
-    ######## NODE SECURITY CHANNEL SCHEDULE ########
-    NODE_START=$(az aks show -g "$RG" -n "$CL_NAME" \
-      --query "nodeOsUpgradeProfile.maintenanceWindow.schedule.startDate" -o tsv)
+    # ---- Node security channel schedule (maintenanceconfiguration: aksManagedNodeOSUpgradeSchedule) ----
+    NODE_MC=$(az aks maintenanceconfiguration show -g "$RG" --cluster-name "$CL_NAME" --name aksManagedNodeOSUpgradeSchedule -o json 2>/dev/null)
 
-    NODE_FREQ=$(az aks show -g "$RG" -n "$CL_NAME" \
-      --query "nodeOsUpgradeProfile.maintenanceWindow.schedule.frequency" -o tsv)
+    NODE_START_STR=""
+    if [[ -n "$NODE_MC" ]]; then
+      NODE_DATE=$(echo "$NODE_MC" | jq -r '.maintenanceWindow.startDate // empty')
+      NODE_TIME=$(echo "$NODE_MC" | jq -r '.maintenanceWindow.startTime // "00:00"' )
+      NODE_UTC=$(echo "$NODE_MC"  | jq -r '.maintenanceWindow.utcOffset // "+00:00"' )
+      NODE_DOW=$(echo "$NODE_MC"  | jq -r '.maintenanceWindow.schedule.weekly.dayOfWeek // empty')
+      NODE_INT=$(echo "$NODE_MC"  | jq -r '.maintenanceWindow.schedule.weekly.intervalWeeks // empty')
 
-    NODE_DAYS=$(az aks show -g "$RG" -n "$CL_NAME" \
-      --query "nodeOsUpgradeProfile.maintenanceWindow.schedule.weekDays | join(', ', @)" -o tsv)
+      if [[ -n "$NODE_DATE" ]]; then
+        NODE_START_STR="$NODE_DATE $NODE_TIME $NODE_UTC"
+        NODE_FREQ=""
+        [[ -n "$NODE_INT" ]] && NODE_FREQ="Weekly"
+        NODE_SCHED=$(format_schedule "$NODE_START_STR" "$NODE_FREQ" "$NODE_DOW")
+      else
+        NODE_SCHED="Not Configured"
+      fi
+    else
+      NODE_SCHED="Not Configured"
+    fi
 
-    NODE_SCHED=$(format_schedule "$NODE_START" "$NODE_FREQ" "$NODE_DAYS")
-
-    ######## OUTPUT ########
     echo "<button class='collapsible'>Cluster Upgrade & Security Schedule</button>
 <div class='content'><pre>
 Automatic Upgrade Mode     : $AUTO_TYPE
@@ -232,7 +252,7 @@ $NODE_SCHED
     ############################################################
     # PSA
     ############################################################
-    PSA=$(kubectl get ns -o json | jq -r \
+    PSA=$(kubectl get ns -o json 2>/dev/null | jq -r \
       '.items[] |
       [.metadata.name,
        (.metadata.labels["pod-security.kubernetes.io/enforce"] // "none"),
@@ -284,19 +304,21 @@ $RB2
     echo "<button class='collapsible'>Pod CPU/Memory Usage</button>
 <div class='content'><pre>$METRICS</pre></div>" >> "$FINAL_REPORT"
 
+    # restore strict mode for next cluster's setup section
     set -e
-  done # cluster loop
+
+  done  # cluster loop
 
   echo "</div>" >> "$FINAL_REPORT"
 
-done # subscription loop
+done  # subscription loop
 
 ############################################################
 # END REPORT
 ############################################################
 echo "</body></html>" >> "$FINAL_REPORT"
 
-echo "==============================================="
+echo "===================================================="
 echo "AKS HTML Report Generated Successfully"
 echo "Saved at: $FINAL_REPORT"
-echo "==============================================="
+echo "===================================================="
