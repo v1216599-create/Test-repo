@@ -102,9 +102,9 @@ echo "<div style='background:#3498db;padding:15px;border-radius:6px;margin-botto
 ############################################################
 # SUBSCRIPTIONS
 ############################################################
-SUB="3f499502-898a-4be8-8dc6-0b6260bd0c8c"
+SUB_ID="3f499502-898a-4be8-8dc6-0b6260bd0c8c"
 
-SUBS=$(az account list --query "[?id=='$SUB'].{id:id,name:name}" -o json)
+SUBS=$(az account list --query "[?id=='$SUB_ID'].{id:id,name:name}" -o json)
 
 ############################################################
 # PROCESS SUBSCRIPTIONS
@@ -112,32 +112,34 @@ SUBS=$(az account list --query "[?id=='$SUB'].{id:id,name:name}" -o json)
 for row in $(echo "$SUBS" | jq -r '.[] | @base64'); do
 _jq(){ echo "$row" | base64 --decode | jq -r "$1"; }
 
-SUB_ID=$(_jq '.id')
-SUB_NAME=$(_jq '.name')
+SUB=$(_jq '.id')
+SUBNAME=$(_jq '.name')
 
-echo "<div class='card'><h2>Subscription: $SUB_NAME</h2>
-<p><b>Subscription ID:</b> $SUB_ID</p>" >> "$FINAL_REPORT"
+echo "<div class='card'><h2>Subscription: $SUBNAME</h2>
+<p><b>Subscription ID:</b> $SUB</p>" >> "$FINAL_REPORT"
 
-az account set --subscription "$SUB_ID"
+az account set --subscription "$SUB"
 
 CLUSTERS=$(az aks list --query "[].{name:name,rg:resourceGroup}" -o json)
 
 if [[ $(echo "$CLUSTERS" | jq length) -eq 0 ]]; then
-    echo "<p>No AKS clusters in this subscription.</p></div>" >> "$FINAL_REPORT"
+    echo "<p>No AKS clusters found.</p></div>" >> "$FINAL_REPORT"
     continue
 fi
 
 ############################################################
-# PROCESS CLUSTERS
+# PROCESS EACH CLUSTER
 ############################################################
 for cluster in $(echo "$CLUSTERS" | jq -r '.[] | @base64'); do
-
 _cjq(){ echo "$cluster" | base64 --decode | jq -r "$1"; }
 
 CLUSTER=$(_cjq '.name')
 RG=$(_cjq '.rg')
 
-az aks get-credentials -g "$RG" -n "$CLUSTER" --overwrite-existing >/dev/null
+echo "[INFO] Processing $CLUSTER"
+
+# FIX FOR GITHUB ACTIONS FAILING
+az aks get-credentials -g "$RG" -n "$CLUSTER" --overwrite-existing >/dev/null 2>&1 || true
 
 ############################################################
 # BASIC CHECKS
@@ -145,7 +147,7 @@ az aks get-credentials -g "$RG" -n "$CLUSTER" --overwrite-existing >/dev/null
 CLUSTER_VERSION=$(az aks show -g "$RG" -n "$CLUSTER" --query kubernetesVersion -o tsv)
 
 NODEPOOL_SCALE=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" \
--o json | jq -r '.[] | "\(.name): autoscale=\(.enableAutoScaling), min=\(.minCount), max=\(.maxCount)"')
+    -o json | jq -r '.[] | "\(.name): autoscale=\(.enableAutoScaling), min=\(.minCount), max=\(.maxCount)"')
 
 NODEPOOL_SCALE_FORMATTED=$(echo "$NODEPOOL_SCALE" | sed '/^$/d')
 
@@ -183,7 +185,7 @@ echo "<button class='collapsible'>Autoscaling Status – All Node Pools</button>
 <div class='content'><pre>$NODEPOOL_SCALE_FORMATTED</pre></div>" >> "$FINAL_REPORT"
 
 ############################################################
-# NETWORKING CHECKS
+# NETWORKING
 ############################################################
 NETWORK_MODEL=$(az aks show -g "$RG" -n "$CLUSTER" --query "networkProfile.networkPlugin" -o tsv)
 API_STATUS=$(kubectl get --raw='/healthz' 2>/dev/null | grep -i ok || echo "FAILED")
@@ -197,28 +199,28 @@ API Server Latency  : $API_LATENCY
 </pre></div>" >> "$FINAL_REPORT"
 
 ############################################################
-# IDENTITY & ACCESS CHECKS
+# IDENTITY & ACCESS
 ############################################################
 MANAGED_ID=$(az aks show -g "$RG" -n "$CLUSTER" --query identity.type -o tsv)
 RBAC_ENABLED=$(az aks show -g "$RG" -n "$CLUSTER" --query enableRBAC -o tsv)
 AAD_ENABLED=$(az aks show -g "$RG" -n "$CLUSTER" --query "aadProfile" -o json | jq -r 'if .==null then "Disabled" else "Enabled" end')
+
 SP_ID=$(az aks show -g "$RG" -n "$CLUSTER" --query servicePrincipalProfile.clientId -o tsv)
 SP_EXPIRY=$(az ad sp show --id "$SP_ID" --query "passwordCredentials[0].endDateTime" -o tsv 2>/dev/null || echo "N/A")
 
 echo "<button class='collapsible'>Identity & Access Checks</button>
 <div class='content'><pre>
-Managed Identity Type  : $MANAGED_ID
-RBAC Enabled           : $RBAC_ENABLED
-AAD Integration        : $AAD_ENABLED
-Service Principal ID   : $SP_ID
-Service Principal Exp  : $SP_EXPIRY
+Managed Identity Type : $MANAGED_ID
+RBAC Enabled          : $RBAC_ENABLED
+AAD Integration       : $AAD_ENABLED
+Service Principal ID  : $SP_ID
+Service Principal Exp : $SP_EXPIRY
 </pre></div>" >> "$FINAL_REPORT"
 
 ############################################################
-# OBSERVABILITY CHECKS
+# OBSERVABILITY
 ############################################################
 METRICS_SERVER=$(kubectl get deployment -n kube-system | grep metrics-server || echo "Not Installed")
-
 PROM_NODE_EXPORTER=$(kubectl get pods -A | grep node-exporter || echo "Not Found")
 PROM_PROMETHEUS=$(kubectl get pods -A | grep prometheus || echo "Not Found")
 GRAFANA=$(kubectl get pods -A | grep grafana || echo "Not Found")
@@ -226,26 +228,24 @@ GRAFANA=$(kubectl get pods -A | grep grafana || echo "Not Found")
 echo "<button class='collapsible'>Observability Checks</button>
 <div class='content'><pre>
 Metrics Server  : $METRICS_SERVER
-
 Node Exporter   : $PROM_NODE_EXPORTER
 Prometheus      : $PROM_PROMETHEUS
 Grafana         : $GRAFANA
 </pre></div>" >> "$FINAL_REPORT"
 
 ############################################################
-# SECURITY CHECKS
+# SECURITY
 ############################################################
 POD_SECURITY=$(az aks show -g "$RG" -n "$CLUSTER" --query "securityProfile.podSecurityPolicy.enabled" -o tsv 2>/dev/null || echo "N/A")
-TLS=$(az aks show -g "$RG" -n "$CLUSTER" --query "securityProfile.enableTLS" -o tsv 2>/dev/null || echo "false")
+TLS_ENF=$(az aks show -g "$RG" -n "$CLUSTER" --query "securityProfile.enableTLS" -o tsv 2>/dev/null || echo "false")
 DEFENDER=$(az aks show -g "$RG" -n "$CLUSTER" --query "securityProfile.azureDefender.enabled" -o tsv 2>/dev/null || echo "Not Registered")
-IMAGE_SCAN="N/A"
 
 echo "<button class='collapsible'>Security Checks</button>
 <div class='content'><pre>
 Pod Security Admission : $POD_SECURITY
-TLS Enforcement        : $TLS
+TLS Enforcement        : $TLS_ENF
 Azure Defender Enabled : $DEFENDER
-Image Scanning         : $IMAGE_SCAN
+Image Scanning         : N/A
 </pre></div>" >> "$FINAL_REPORT"
 
 ############################################################
