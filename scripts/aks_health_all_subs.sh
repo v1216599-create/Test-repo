@@ -23,13 +23,33 @@ HTML_HEADER='
 <style>
 body { font-family: Arial, sans-serif; margin: 20px; background: #eef2f7; }
 h1, h2, h3 { color: #2c3e50; }
-.card { background: white; padding: 20px; margin-bottom: 25px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
-table { width: 100%; border-collapse: collapse; margin-top: 15px; border-radius: 12px; overflow: hidden; font-size: 15px; }
+
+.card { background: white; padding: 20px; margin-bottom: 25px;
+border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+
+table { width: 100%; border-collapse: collapse; margin-top: 15px;
+border-radius: 12px; overflow: hidden; font-size: 15px; }
+
 th { background: #2c3e50; color: white; padding: 12px; text-align: left; }
 td { padding: 10px; border-bottom: 1px solid #e8e8e8; }
+
 .ok { background:#d4edda !important; color:#155724 !important; }
 .warn { background:#fff3cd !important; color:#856404 !important; }
 .bad { background:#f8d7da !important; color:#721c24 !important; }
+
+/* NEW — Dark Green for all Healthy rows */
+.healthy-all {
+  background:#c8f7c5 !important;
+  color:#145a32 !important;
+  font-weight:bold;
+}
+
+/* Dark Green Version Row */
+.version-ok {
+  background:#c8f7c5 !important;
+  color:#145a32 !important;
+  font-weight:bold;
+}
 
 .collapsible {
   background-color: #3498db; color: white; cursor: pointer;
@@ -37,12 +57,13 @@ td { padding: 10px; border-bottom: 1px solid #e8e8e8; }
   font-size: 16px; border-radius: 6px; margin-top: 12px; text-align:left;
 }
 .collapsible:hover { background-color: #2980b9; }
-.content { padding: 12px; display: none; border-radius: 6px;
-  border: 1px solid #dcdcdc; background: #fafafa; }
-pre { background:#2d3436; color:#dfe6e9; padding:10px; border-radius: 6px; overflow-x:auto; }
 
-/* NEW — Cluster Version Dark Green */
-.version-ok { background:#c8f7c5 !important; color:#145a32 !important; font-weight:bold; }
+.content {
+  padding: 12px; display: none; border-radius: 6px;
+  border: 1px solid #dcdcdc; background: #fafafa;
+}
+
+pre { background:#2d3436; color:#dfe6e9; padding:10px; border-radius: 6px; overflow-x:auto; }
 </style>
 
 <script>
@@ -65,14 +86,14 @@ document.addEventListener("DOMContentLoaded",()=>{
 # START REPORT
 ############################################################
 echo "$HTML_HEADER" > "$FINAL_REPORT"
-echo "<div class='card'><h1>AKS Cluster Health – Report</h1></div>" >> "$FINAL_REPORT"
 
-# NEW — Blue banner heading
-echo "<div style='background:#1f6feb;color:white;padding:15px;border-radius:10px;margin-bottom:20px;'>
-<h1>AKS Cluster Health – Selected Subscriptions</h1></div>" >> "$FINAL_REPORT"
+# NEW — Light blue title
+echo "<div style='background:#cce4ff;padding:20px;border-radius:12px;margin-bottom:25px;'>
+<h1 style='color:#003366;margin:0;'>AKS Cluster Health – Report</h1>
+</div>" >> "$FINAL_REPORT"
 
 ############################################################
-# SUBSCRIPTIONS TO SCAN
+# SUBSCRIPTIONS
 ############################################################
 SUB1="3f499502-898a-4be8-8dc6-0b6260bd0c8c"
 SUB2="yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy"
@@ -115,17 +136,22 @@ echo "[INFO] Processing $CLUSTER"
 az aks get-credentials -g "$RG" -n "$CLUSTER" --overwrite-existing >/dev/null
 
 ############################################################
-# BASIC HEALTH CHECKS
+# BASIC CHECKS
 ############################################################
 CLUSTER_VERSION=$(az aks show -g "$RG" -n "$CLUSTER" --query kubernetesVersion -o tsv)
 
-AUTOSCALE=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" --query '[0].enableAutoScaling' -o tsv || echo "false")
-MIN_COUNT=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" --query '[0].minCount' -o tsv || echo "N/A")
-MAX_COUNT=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" --query '[0].maxCount' -o tsv || echo "N/A")
+AUTOSCALE=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" \
+--query '[0].enableAutoScaling' -o tsv || echo "false")
 
-# NEW — Autoscaling status per node pool
+MIN_COUNT=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" \
+--query '[0].minCount' -o tsv || echo "N/A")
+
+MAX_COUNT=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" \
+--query '[0].maxCount' -o tsv || echo "N/A")
+
 NODEPOOL_SCALE=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" -o json \
-  | jq -r '.[] | "\(.name): autoscale=\(.enableAutoScaling), min=\(.minCount), max=\(.maxCount)"' | tr '\n' '; ')
+  | jq -r '.[] | "\(.name): autoscale=\(.enableAutoScaling), min=\(.minCount), max=\(.maxCount)"' \
+  | tr '\n' '; ')
 [[ -z "$NODEPOOL_SCALE" ]] && NODEPOOL_SCALE="No Node Pools Found"
 
 NODE_NOT_READY=$(kubectl get nodes --no-headers 2>/dev/null | awk '$2!="Ready"{print}' || true)
@@ -133,51 +159,36 @@ POD_CRASH=$(kubectl get pods -A --no-headers 2>/dev/null \
     | awk '$4=="CrashLoopBackOff" || $3=="Error" || $3=="Pending"' || true)
 PVC_FAIL=$(kubectl get pvc -A 2>/dev/null | grep -i failed || true)
 
-[[ -z "$NODE_NOT_READY" ]] && NODE_CLASS="ok" || NODE_CLASS="bad"
-[[ -z "$POD_CRASH" ]] && POD_CLASS="ok" || POD_CLASS="bad"
-[[ -z "$PVC_FAIL" ]] && PVC_CLASS="ok" || PVC_CLASS="bad"
-[[ "$AUTOSCALE" == "true" ]] && AUTO_CLASS="ok" || AUTO_CLASS="warn"
+[[ -z "$NODE_NOT_READY" ]] && NODE_CLASS="healthy-all" || NODE_CLASS="bad"
+[[ -z "$POD_CRASH" ]] && POD_CLASS="healthy-all" || POD_CLASS="bad"
+[[ -z "$PVC_FAIL" ]] && PVC_CLASS="healthy-all" || PVC_CLASS="bad"
+[[ "$AUTOSCALE" == "true" ]] && AUTO_CLASS="healthy-all" || AUTO_CLASS="warn"
 
-NODE_STATUS=$([[ $NODE_CLASS == "ok" ]] && echo "✓ Healthy" || echo "✗ Issues")
-POD_STATUS=$([[ $POD_CLASS == "ok" ]] && echo "✓ Healthy" || echo "✗ Pod Issues")
-PVC_STATUS=$([[ $PVC_CLASS == "ok" ]] && echo "✓ Healthy" || echo "✗ PVC Failures")
-AUTO_STATUS=$([[ $AUTO_CLASS == "ok" ]] && echo "Enabled (Min:$MIN_COUNT Max:$MAX_COUNT)" || echo "Disabled")
+NODE_STATUS=$([[ $NODE_CLASS == "healthy-all" ]] && echo "✓ Healthy" || echo "✗ Issues")
+POD_STATUS=$([[ $POD_CLASS == "healthy-all" ]] && echo "✓ Healthy" || echo "✗ Pod Issues")
+PVC_STATUS=$([[ $PVC_CLASS == "healthy-all" ]] && echo "✓ Healthy" || echo "✗ PVC Failures")
+AUTO_STATUS=$([[ $AUTO_CLASS == "healthy-all" ]] && echo "Enabled (Min:$MIN_COUNT Max:$MAX_COUNT)" || echo "Disabled")
 
 ############################################################
-# SUMMARY BLOCK
+# SUMMARY TABLE
 ############################################################
 echo "<div class='card'>
 <h3>Cluster: $CLUSTER</h3>
 <table>
 <tr><th>Check</th><th>Status</th></tr>
+
 <tr class='$NODE_CLASS'><td>Node Health</td><td>$NODE_STATUS</td></tr>
 <tr class='$POD_CLASS'><td>Pod Health</td><td>$POD_STATUS</td></tr>
 <tr class='$PVC_CLASS'><td>PVC Health</td><td>$PVC_STATUS</td></tr>
 <tr class='$AUTO_CLASS'><td>Autoscaling</td><td>$AUTO_STATUS</td></tr>
 
-<!-- NEW — per node pool autoscale -->
-<tr><td>Node Pool Autoscale Status</td><td>$NODEPOOL_SCALE</td></tr>
+<tr class='healthy-all'><td>Node Pool Autoscale Status</td>
+<td>$NODEPOOL_SCALE</td></tr>
 
-<!-- NEW — Dark Green Version Row -->
 <tr class='version-ok'><td>Cluster Version</td><td>$CLUSTER_VERSION</td></tr>
 
 </table></div>
 " >> "$FINAL_REPORT"
-
-############################################################
-# NEW — OVERALL HEALTH STATUS BOX
-############################################################
-if [[ "$NODE_CLASS" == "ok" && "$POD_CLASS" == "ok" && "$PVC_CLASS" == "ok" ]]; then
-    OVERALL_STATUS="Healthy"
-    OVERALL_CLASS="version-ok"
-else
-    OVERALL_STATUS="Issues Found"
-    OVERALL_CLASS="bad"
-fi
-
-echo "<div class='card ${OVERALL_CLASS}' style='font-size:18px;font-weight:bold;'>
-Cluster Overall Health Status: $OVERALL_STATUS
-</div>" >> "$FINAL_REPORT"
 
 ############################################################
 # NETWORKING CHECKS
@@ -208,13 +219,14 @@ API Server Latency Metric   : $API_LAT
 ############################################################
 MANAGED_ID=$(az aks show -g "$RG" -n "$CLUSTER" --query identity.type -o tsv || echo "N/A")
 
-RBAC_ENABLED=$(az ks show -g "$RG" -n "$CLUSTER" --query enableRBAC -o tsv || echo "N/A")
+RBAC_ENABLED=$(az aks show -g "$RG" -n "$CLUSTER" --query enableRBAC -o tsv || echo "N/A")
 
 AAD_ENABLED=$(az aks show -g "$RG" -n "$CLUSTER" --query "aadProfile" -o json \
   | jq -r 'if . == null then "Disabled" else "Enabled" end' || echo "Unknown")
 
 SP_ID=$(az aks show -g "$RG" -n "$CLUSTER" --query servicePrincipalProfile.clientId -o tsv || echo "N/A")
-SP_EXPIRY=$(az ad sp show --id "$SP_ID" --query "passwordCredentials[0].endDateTime" -o tsv 2>/dev/null || echo "N/A")
+SP_EXPIRY=$(az ad sp show --id "$SP_ID" \
+--query "passwordCredentials[0].endDateTime" -o tsv 2>/dev/null || echo "N/A")
 
 echo "<button class='collapsible'>Identity & Access Checks</button>
 <div class='content'><pre>
@@ -249,13 +261,16 @@ Grafana                     : $GF
 PSA=$(kubectl get podsecurityadmissions.config.openshift.io 2>/dev/null || echo "N/A")
 
 SECRETS_ENC=$(az aks show -g "$RG" -n "$CLUSTER" \
-    --query 'securityProfile.enableSecretsEncryption' -o tsv 2>/dev/null || echo "N/A")
+--query 'securityProfile.enableSecretsEncryption' -o tsv 2>/dev/null || echo "N/A")
 
-DEFENDER=$(az security pricing show --name KubernetesService --query pricingTier -o tsv 2>/dev/null || echo "Not Registered")
+DEFENDER=$(az security pricing show --name KubernetesService \
+--query pricingTier -o tsv 2>/dev/null || echo "Not Registered")
 
-TLS=$(az aks show -g "$RG" -n "$CLUSTER" --query apiServerAccessProfile.enablePrivateCluster -o tsv || echo "N/A")
+TLS=$(az aks show -g "$RG" -n "$CLUSTER" \
+--query apiServerAccessProfile.enablePrivateCluster -o tsv || echo "N/A")
 
-IMG_SCAN=$(az security setting show --name "MCAS" --query status -o tsv 2>/dev/null || echo "N/A")
+IMG_SCAN=$(az security setting show --name "MCAS" \
+--query status -o tsv 2>/dev/null || echo "N/A")
 
 echo "<button class='collapsible'>Security Checks</button>
 <div class='content'><pre>
@@ -305,14 +320,14 @@ fi
 
 echo "</pre></div>" >> "$FINAL_REPORT"
 
-done  # End cluster loop
+done  # End clusters
 echo "</div>" >> "$FINAL_REPORT"
 
-done  # End subscription loop
+done  # End subscriptions
 
 echo "</body></html>" >> "$FINAL_REPORT"
 
 echo "===================================================="
-echo "AKS HTML Report Generated (with Enhancements)"
+echo "AKS HTML Report Generated Successfully"
 echo "Saved at: $FINAL_REPORT"
 echo "===================================================="
