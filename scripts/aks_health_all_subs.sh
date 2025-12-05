@@ -39,43 +39,31 @@ td {
   white-space: normal;
 }
 
-/* Healthy green rows */
+/* NEW — Green for Healthy Rows */
 .healthy-all {
   background:#c8f7c5 !important;
   color:#145a32 !important;
   font-weight:bold;
 }
 
-/* Cluster Version row green */
+/* Dark Green for version row */
 .version-ok {
   background:#c8f7c5 !important;
   color:#145a32 !important;
   font-weight:bold;
 }
 
-/* Collapsible buttons */
 .collapsible {
-  background-color: #3498db;
-  color: white;
-  cursor: pointer;
-  padding: 12px;
-  width: 100%;
-  border: none;
-  outline: none;
-  font-size: 16px;
-  border-radius: 6px;
-  margin-top: 12px;
-  text-align:left;
+  background-color: #3498db; color: white; cursor: pointer;
+  padding: 12px; width: 100%; border: none; outline: none;
+  font-size: 16px; border-radius: 6px; margin-top: 12px; text-align:left;
 }
 
 .collapsible:hover { background-color: #2980b9; }
 
 .content {
-  padding: 12px;
-  display: none;
-  border-radius: 6px;
-  border: 1px solid #dcdcdc;
-  background: #fafafa;
+  padding: 12px; display: none; border-radius: 6px;
+  border: 1px solid #dcdcdc; background: #fafafa;
 }
 
 pre {
@@ -109,14 +97,9 @@ document.addEventListener("DOMContentLoaded",()=>{
 ############################################################
 echo "$HTML_HEADER" > "$FINAL_REPORT"
 
-# TITLE (Blue Background)
+# NEW Title (Blue Background)
 echo "<div style='background:#3498db;padding:15px;border-radius:6px;margin-bottom:25px;'>
 <h1 style='color:white;margin:0;font-weight:bold;'>AKS Cluster Health – Report</h1>
-</div>" >> "$FINAL_REPORT"
-
-# BLUE HEADER FOR SELECTED SUBSCRIPTIONS
-echo "<div style='background:#3498db;padding:10px;border-radius:6px;margin-bottom:20px;'>
-<h2 style='color:white;margin:0;'>Selected Subscriptions</h2>
 </div>" >> "$FINAL_REPORT"
 
 ############################################################
@@ -176,13 +159,18 @@ MIN_COUNT=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" \
 MAX_COUNT=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" \
 --query '[0].maxCount' -o tsv || echo "N/A")
 
+# All nodepools (raw list)
 NODEPOOL_SCALE=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" \
 -o json | jq -r '.[] | "\(.name): autoscale=\(.enableAutoScaling), min=\(.minCount), max=\(.maxCount)"' \
 | tr '\n' '; ')
 [[ -z "$NODEPOOL_SCALE" ]] && NODEPOOL_SCALE="No Node Pools Found"
 
+# Convert to one-per-line
+NODEPOOL_SCALE_FORMATTED=$(echo "$NODEPOOL_SCALE" | tr ';' '\n' | sed '/^$/d')
+
 NODE_NOT_READY=$(kubectl get nodes --no-headers 2>/dev/null | awk '$2!="Ready"{print}' || true)
-POD_CRASH=$(kubectl get pods -A --no-headers 2>/dev/null | awk '$4=="CrashLoopBackOff" || $3=="Error" || $3=="Pending"' || true)
+POD_CRASH=$(kubectl get pods -A --no-headers 2>/dev/null \
+| awk '$4=="CrashLoopBackOff" || $3=="Error" || $3=="Pending"' || true)
 PVC_FAIL=$(kubectl get pvc -A 2>/dev/null | grep -i failed || true)
 
 [[ -z "$NODE_NOT_READY" ]] && NODE_CLASS="healthy-all" || NODE_CLASS="bad"
@@ -208,11 +196,6 @@ echo "<div class='card'>
 <tr class='$PVC_CLASS'><td>PVC Health</td><td>$PVC_STATUS</td></tr>
 <tr class='$AUTO_CLASS'><td>Autoscaling</td><td>$AUTO_STATUS</td></tr>
 
-<tr class='healthy-all'>
-<td>Node Pool Autoscale Status</td>
-<td>$NODEPOOL_SCALE</td>
-</tr>
-
 <tr class='version-ok'><td>Cluster Version</td><td>$CLUSTER_VERSION</td></tr>
 
 </table></div>
@@ -222,34 +205,26 @@ echo "<div class='card'>
 # NEW — AUTOSCALING DETAILS COLLAPSIBLE
 ############################################################
 echo "<button class='collapsible'>Autoscaling Status – All Node Pools</button>
-<div class='content'><pre>$NODEPOOL_SCALE</pre></div>" >> "$FINAL_REPORT"
+<div class='content'><pre>$NODEPOOL_SCALE_FORMATTED</pre></div>" >> "$FINAL_REPORT"
 
 ############################################################
 # NETWORKING
 ############################################################
 NETWORK_MODEL=$(az aks show -g "$RG" -n "$CLUSTER" --query "networkProfile.networkPlugin" -o tsv)
-
 API_SERVER=$(kubectl get --raw='/healthz' 2>/dev/null | grep -i ok || echo "FAILED")
-
-AUDIT_LOGS=$(az monitor diagnostic-settings list \
-  --resource "$(az aks show -g "$RG" -n "$CLUSTER" --query id -o tsv)" \
-| jq '(.value // [])[] | select(.logs[]?.category=="kube-apiserver-audit")' | wc -l)
-
-[[ "$AUDIT_LOGS" -gt 0 ]] && AUDIT_STATUS="Enabled" || AUDIT_STATUS="Disabled"
 
 echo "<button class='collapsible'>Networking Checks</button>
 <div class='content'><pre>
-Network Model               : $NETWORK_MODEL
-API Server Status           : $API_SERVER
-API Server Audit Logs       : $AUDIT_STATUS
+Network Model     : $NETWORK_MODEL
+API Server Status : $API_SERVER
 </pre></div>" >> "$FINAL_REPORT"
 
 ############################################################
-# IDENTITY & ACCESS
+# IDENTITY / ACCESS
 ############################################################
-MANAGED_ID=$(az aks show -g "$RG" -n "$CLUSTER" --query identity.type -o tsv || echo "N/A")
+MANAGED_ID=$(az aks show -g "$RG" -n "$CLUSTER" --query identity.type -o tsv)
 
-RBAC_ENABLED=$(az aks show -g "$RG" -n "$CLUSTER" --query enableRBAC -o tsv || echo "N/A")
+RBAC_ENABLED=$(az aks show -g "$RG" -n "$CLUSTER" --query enableRBAC -o tsv)
 
 AAD_ENABLED=$(az aks show -g "$RG" -n "$CLUSTER" --query "aadProfile" -o json \
 | jq -r 'if . == null then "Disabled" else "Enabled" end')
@@ -259,10 +234,10 @@ SP_ID=$(az aks show -g "$RG" -n "$CLUSTER" \
 
 echo "<button class='collapsible'>Identity & Access Checks</button>
 <div class='content'><pre>
-Managed Identity Type       : $MANAGED_ID
-RBAC Enabled                : $RBAC_ENABLED
-AAD Integration             : $AAD_ENABLED
-Service Principal ID        : $SP_ID
+Managed Identity Type : $MANAGED_ID
+RBAC Enabled          : $RBAC_ENABLED
+AAD Integration       : $AAD_ENABLED
+Service Principal ID  : $SP_ID
 </pre></div>
 " >> "$FINAL_REPORT"
 
@@ -274,7 +249,7 @@ SECRETS_ENC=$(az aks show -g "$RG" -n "$CLUSTER" \
 
 echo "<button class='collapsible'>Security Checks</button>
 <div class='content'><pre>
-Secrets Encryption          : $SECRETS_ENC
+Secrets Encryption : $SECRETS_ENC
 </pre></div>
 " >> "$FINAL_REPORT"
 
@@ -318,10 +293,10 @@ fi
 
 echo "</pre></div>" >> "$FINAL_REPORT"
 
-done # end cluster loop
-echo "</div>" >> "$FINAL_REPORT"
+done # cluster loop
 
-done # end subscription loop
+echo "</div>" >> "$FINAL_REPORT"
+done # subscription loop
 
 echo "</body></html>" >> "$FINAL_REPORT"
 
@@ -329,4 +304,3 @@ echo "===================================================="
 echo "AKS HTML Report Generated Successfully"
 echo "Saved at: $FINAL_REPORT"
 echo "===================================================="
-
