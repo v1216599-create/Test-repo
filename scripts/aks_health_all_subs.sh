@@ -106,7 +106,7 @@ echo "<div style='background:#3498db;padding:15px;border-radius:6px;margin-botto
 # SUBSCRIPTIONS
 ############################################################
 SUB1="3f499502-898a-4be8-8dc6-0b6260bd0c8c"
-SUB2="yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy"
+SUB2="3f499502-898a-4be8-8dc6-0b6260bd0c8c"
 
 SUBS=$(az account list --query "[?id=='$SUB1' || id=='$SUB2'].{id:id,name:name}" -o json)
 
