@@ -172,6 +172,70 @@ echo "<div class='card'>
 </table></div>" >> "$FINAL_REPORT"
 
 ############################################################
+# UPGRADE & SECURITY SCHEDULE (MODERN + LEGACY)
+############################################################
+
+# Automatic upgrade mode (modern + legacy)
+AUTO_MODE_NEW=$(az aks show -g "$RG" -n "$CLUSTER" --query "autoUpgradeProfile.upgradeChannel" -o tsv 2>/dev/null)
+AUTO_MODE_OLD=$(az aks show -g "$RG" -n "$CLUSTER" --query "nodeImageUpgradeChannel" -o tsv 2>/dev/null)
+
+if [[ -n "$AUTO_MODE_NEW" ]]; then
+  AUTO_UPGRADE_MODE="$AUTO_MODE_NEW"
+elif [[ -n "$AUTO_MODE_OLD" ]]; then
+  AUTO_UPGRADE_MODE="$AUTO_MODE_OLD"
+else
+  AUTO_UPGRADE_MODE="Not Configured"
+fi
+
+# Automatic upgrade schedule (modern + legacy)
+AUTO_SCHED_NEW=$(az aks show -g "$RG" -n "$CLUSTER" --query "autoUpgradeProfile.maintenanceWindow.schedule" -o json 2>/dev/null)
+AUTO_SCHED_OLD=$(az aks show -g "$RG" -n "$CLUSTER" --query "maintenanceWindow.schedule" -o json 2>/dev/null)
+AUTO_SCHED_OLD2=$(az aks show -g "$RG" -n "$CLUSTER" --query "nodeOsUpgradeProfile.schedule" -o json 2>/dev/null)
+
+if [[ -n "$AUTO_SCHED_NEW" && "$AUTO_SCHED_NEW" != "null" ]]; then
+  AUTO_UPGRADE_SCHEDULE="$AUTO_SCHED_NEW"
+elif [[ -n "$AUTO_SCHED_OLD" && "$AUTO_SCHED_OLD" != "null" ]]; then
+  AUTO_UPGRADE_SCHEDULE="$AUTO_SCHED_OLD"
+elif [[ -n "$AUTO_SCHED_OLD2" && "$AUTO_SCHED_OLD2" != "null" ]]; then
+  AUTO_UPGRADE_SCHEDULE="$AUTO_SCHED_OLD2"
+else
+  AUTO_UPGRADE_SCHEDULE="Not Configured"
+fi
+
+# Node security channel type (modern + legacy)
+SEC_TYPE_NEW=$(az aks show -g "$RG" -n "$CLUSTER" --query "securityProfile.nodeOsUpgradeChannel" -o tsv 2>/dev/null)
+SEC_TYPE_OLD=$(az aks show -g "$RG" -n "$CLUSTER" --query "upgradeSettings.nodeOSUpgradeChannel" -o tsv 2>/dev/null)
+
+if [[ -n "$SEC_TYPE_NEW" ]]; then
+  SECURITY_CHANNEL_TYPE="$SEC_TYPE_NEW"
+elif [[ -n "$SEC_TYPE_OLD" ]]; then
+  SECURITY_CHANNEL_TYPE="$SEC_TYPE_OLD"
+else
+  SECURITY_CHANNEL_TYPE="Not Configured"
+fi
+
+# Security channel schedule (modern + legacy)
+SEC_SCHED_NEW=$(az aks show -g "$RG" -n "$CLUSTER" --query "securityProfile.maintenanceWindow.schedule" -o json 2>/dev/null)
+SEC_SCHED_OLD=$(az aks show -g "$RG" -n "$CLUSTER" --query "nodeOsUpgradeProfile.schedule" -o json 2>/dev/null)
+
+if [[ -n "$SEC_SCHED_NEW" && "$SEC_SCHED_NEW" != "null" ]]; then
+  SECURITY_CHANNEL_SCHEDULE="$SEC_SCHED_NEW"
+elif [[ -n "$SEC_SCHED_OLD" && "$SEC_SCHED_OLD" != "null" ]]; then
+  SECURITY_CHANNEL_SCHEDULE="$SEC_SCHED_OLD"
+else
+  SECURITY_CHANNEL_SCHEDULE="Not Configured"
+fi
+
+echo "<button class='collapsible'>Cluster Upgrade & Security Schedule</button>
+<div class='content'><pre>
+Automatic Upgrade Mode     : $AUTO_UPGRADE_MODE
+Upgrade Window Schedule    : $AUTO_UPGRADE_SCHEDULE
+
+Node Security Channel Type : $SECURITY_CHANNEL_TYPE
+Security Channel Schedule  : $SECURITY_CHANNEL_SCHEDULE
+</pre></div>" >> "$FINAL_REPORT"
+
+############################################################
 # AUTOSCALING DETAILS
 ############################################################
 echo "<button class='collapsible'>Autoscaling Status – All Node Pools</button>
@@ -240,6 +304,41 @@ TLS Enforcement        : $TLS_ENF
 Azure Defender Enabled : $DEFENDER
 Image Scanning         : N/A
 </pre></div>" >> "$FINAL_REPORT"
+
+############################################################
+# NAMESPACE POD SECURITY ADMISSION
+############################################################
+NAMESPACE_PSA=$(kubectl get ns -o json 2>/dev/null | \
+  jq -r '.items[] |
+    [
+      .metadata.name,
+      (.metadata.labels["pod-security.kubernetes.io/enforce"] // "none"),
+      (.metadata.labels["pod-security.kubernetes.io/audit"] // "none"),
+      (.metadata.labels["pod-security.kubernetes.io/warn"] // "none")
+    ] | @tsv')
+
+echo "<button class='collapsible'>Namespace Pod Security Admission</button>
+<div class='content'><pre>" >> "$FINAL_REPORT"
+
+echo -e "NAMESPACE\tENFORCE\tAUDIT\tWARN" >> "$FINAL_REPORT"
+echo "$NAMESPACE_PSA" >> "$FINAL_REPORT"
+
+echo "</pre></div>" >> "$FINAL_REPORT"
+
+############################################################
+# NAMESPACE RBAC (ROLEBINDINGS + CLUSTERROLEBINDINGS)
+############################################################
+echo "<button class='collapsible'>Namespace RBAC (RoleBindings & ClusterRoleBindings)</button>
+<div class='content'><pre>" >> "$FINAL_REPORT"
+
+echo "RoleBindings (namespaced)" >> "$FINAL_REPORT"
+kubectl get rolebindings -A -o wide 2>/dev/null | column -t >> "$FINAL_REPORT" || echo "No RoleBindings found" >> "$FINAL_REPORT"
+
+echo "" >> "$FINAL_REPORT"
+echo "ClusterRoleBindings (cluster-wide)" >> "$FINAL_REPORT"
+kubectl get clusterrolebindings -o wide 2>/dev/null | column -t >> "$FINAL_REPORT" || echo "No ClusterRoleBindings found" >> "$FINAL_REPORT"
+
+echo "</pre></div>" >> "$FINAL_REPORT"
 
 ############################################################
 # NODE LIST (ROLES REMOVED)
