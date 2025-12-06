@@ -1,5 +1,5 @@
 #!/bin/bash
-# Disable exit-on-error globally
+# Disable exit-on-error globally (important for GitHub Actions)
 set +e
 
 export AZURE_AKS_DISABLE_AUTO_VERSION_CHECK=true
@@ -120,13 +120,13 @@ echo "<div style='background:#3498db;padding:15px;border-radius:6px;'>
 <h1>AKS Cluster Health – Report</h1></div>" >> "$FINAL_REPORT"
 
 ############################################################
-# SUBSCRIPTIONS
+# SUBSCRIPTIONS (add more if needed)
 ############################################################
 SUBSCRIPTION="3f499502-898a-4be8-8dc6-0b6260bd0c8c"
 SUBS=$(az account list --query "[?id=='$SUBSCRIPTION']" -o json 2>/dev/null)
 
 ############################################################
-# SUB LOOP
+# SUBSCRIPTION LOOP
 ############################################################
 for S in $(echo "$SUBS" | jq -r '.[] | @base64'); do
   pull(){ echo "$S" | base64 --decode | jq -r "$1"; }
@@ -202,7 +202,7 @@ echo "<div class='card'>
 
 
 ############################################################
-# AUTO UPGRADE MODE FIX
+# AUTO UPGRADE MODE (new + old fields)
 ############################################################
 RAW_AUTO_NEW=$(az aks show -g "$RG" -n "$CLUSTER" --query "autoUpgradeProfile.upgradeChannel" -o tsv 2>/dev/null)
 RAW_AUTO_OLD=$(az aks show -g "$RG" -n "$CLUSTER" --query "autoUpgradeChannel" -o tsv 2>/dev/null)
@@ -224,7 +224,7 @@ esac
 
 
 ############################################################
-# UPGRADE WINDOWS
+# CLUSTER UPGRADE WINDOW (aksManagedAutoUpgradeSchedule)
 ############################################################
 AUTO_MC=$(az aks maintenanceconfiguration show \
     --name aksManagedAutoUpgradeSchedule \
@@ -241,22 +241,46 @@ else
   AUTO_SCHED="Not Configured"
 fi
 
+
 ############################################################
-# NODE OS UPGRADE CHANNEL FIX
+# NODE CHANNEL TYPE (Node Security Channel Type)
+# Try new field first, then fallback top-level nodeOsUpgradeChannel
 ############################################################
-RAW_NODE=$(az aks show -g "$RG" -n "$CLUSTER" --query "autoUpgradeProfile.nodeOSUpgradeChannel" -o tsv)
+RAW_NODE=$(az aks show -g "$RG" -n "$CLUSTER" \
+           --query "autoUpgradeProfile.nodeOSUpgradeChannel" -o tsv 2>/dev/null)
+
+if [[ -z "$RAW_NODE" || "$RAW_NODE" == "null" ]]; then
+  RAW_NODE=$(az aks show -g "$RG" -n "$CLUSTER" \
+             --query "nodeOsUpgradeChannel" -o tsv 2>/dev/null)
+fi
 
 case "$RAW_NODE" in
-  NodeImage)      NODE_TYPE="Node Image" ;;
-  SecurityPatch)  NODE_TYPE="Security Patch" ;;
-  Patch)          NODE_TYPE="Patch" ;;
-  Rapid)          NODE_TYPE="Rapid" ;;
-  ""|null)        NODE_TYPE="Unmanaged" ;;
-  *)              NODE_TYPE="Unmanaged" ;;
+  NodeImage|nodeimage|node-image)
+    NODE_TYPE="Node Image"
+    ;;
+  SecurityPatch|securitypatch)
+    NODE_TYPE="Security Patch"
+    ;;
+  Patch|patch)
+    NODE_TYPE="Patch"
+    ;;
+  Stable|stable)
+    NODE_TYPE="Stable"
+    ;;
+  Rapid|rapid)
+    NODE_TYPE="Rapid"
+    ;;
+  Unmanaged|unmanaged|None|none|""|null)
+    NODE_TYPE="Unmanaged"
+    ;;
+  *)
+    NODE_TYPE="Unmanaged"
+    ;;
 esac
 
+
 ############################################################
-# NODE OS WINDOW
+# NODE OS WINDOW (aksManagedNodeOSUpgradeSchedule)
 ############################################################
 NODE_MC=$(az aks maintenanceconfiguration show \
         --name aksManagedNodeOSUpgradeSchedule \
@@ -294,9 +318,8 @@ $NODE_SCHED
 ############################################################
 # SCALE METHOD FIX (Portal Accurate)
 ############################################################
-
 NODEPOOL_METHOD=""
-NODEPOOLS_JSON=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" -o json)
+NODEPOOLS_JSON=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" -o json 2>/dev/null)
 
 for row in $(echo "$NODEPOOLS_JSON" | jq -r '.[] | @base64'); do
   _np() { echo "$row" | base64 --decode | jq -r "$1"; }
@@ -310,9 +333,9 @@ for row in $(echo "$NODEPOOLS_JSON" | jq -r '.[] | @base64'); do
   if [[ "$NP_AUTO" == "true" ]]; then
     METHOD="Scale method = Autoscale (min=$NP_MIN, max=$NP_MAX)"
   else
-    # Fix NULL count
+    # Fix NULL count: when count is null, derive from kubectl
     if [[ "$NP_COUNT" == "null" || -z "$NP_COUNT" ]]; then
-      REAL_COUNT=$(kubectl get nodes --selector agentpool="$NP_NAME" --no-headers | wc -l)
+      REAL_COUNT=$(kubectl get nodes --selector agentpool="$NP_NAME" --no-headers 2>/dev/null | wc -l)
       METHOD="Scale method = Manual (count=$REAL_COUNT)"
     else
       METHOD="Scale method = Manual (count=$NP_COUNT)"
@@ -323,11 +346,10 @@ for row in $(echo "$NODEPOOLS_JSON" | jq -r '.[] | @base64'); do
 done
 
 
-
 ############################################################
-# AUTOSCALING STATUS
+# AUTOSCALING STATUS (raw autoscale=true/false)
 ############################################################
-SCALE=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" -o json \
+SCALE=$(az aks nodepool list -g "$RG" --cluster-name "$CLUSTER" -o json 2>/dev/null \
   | jq -r '
       .[] |
       if .enableAutoScaling == true then
@@ -345,7 +367,7 @@ echo "<button class='collapsible'>Autoscaling Status – All Node Pools</button>
 ############################################################
 # PSA
 ############################################################
-PSA=$(kubectl get ns -o json | jq -r '
+PSA=$(kubectl get ns -o json 2>/dev/null | jq -r '
   .items[] |
   [.metadata.name,
    (.metadata.labels["pod-security.kubernetes.io/enforce"] // "none"),
@@ -363,8 +385,8 @@ $PSA
 ############################################################
 # RBAC
 ############################################################
-RB1=$(kubectl get rolebindings -A -o wide)
-RB2=$(kubectl get clusterrolebindings -o wide)
+RB1=$(kubectl get rolebindings -A -o wide 2>/dev/null)
+RB2=$(kubectl get clusterrolebindings -o wide 2>/dev/null)
 
 echo "<button class='collapsible'>Namespace RBAC</button>
 <div class='content'><pre>
@@ -388,7 +410,7 @@ echo -e "$NODEPOOL_METHOD" >> "$FINAL_REPORT"
 
 echo "" >> "$FINAL_REPORT"
 echo "=== Kubernetes Nodes ===" >> "$FINAL_REPORT"
-kubectl get nodes -o wide >> "$FINAL_REPORT"
+kubectl get nodes -o wide 2>/dev/null >> "$FINAL_REPORT"
 
 echo "</pre></div>" >> "$FINAL_REPORT"
 
@@ -398,7 +420,7 @@ echo "</pre></div>" >> "$FINAL_REPORT"
 ############################################################
 echo "<button class='collapsible'>Pod List</button>
 <div class='content'><pre>" >> "$FINAL_REPORT"
-kubectl get pods -A -o wide >> "$FINAL_REPORT"
+kubectl get pods -A -o wide 2>/dev/null >> "$FINAL_REPORT"
 echo "</pre></div>" >> "$FINAL_REPORT"
 
 
@@ -407,7 +429,7 @@ echo "</pre></div>" >> "$FINAL_REPORT"
 ############################################################
 echo "<button class='collapsible'>Services List</button>
 <div class='content'><pre>" >> "$FINAL_REPORT"
-kubectl get svc -A -o wide >> "$FINAL_REPORT"
+kubectl get svc -A -o wide 2>/dev/null >> "$FINAL_REPORT"
 echo "</pre></div>" >> "$FINAL_REPORT"
 
 
@@ -416,9 +438,7 @@ echo "</pre></div>" >> "$FINAL_REPORT"
 ############################################################
 echo "<button class='collapsible'>Pod CPU / Memory Usage</button>
 <div class='content'><pre>" >> "$FINAL_REPORT"
-
 kubectl top pods -A 2>/dev/null || echo "Metrics not available" >> "$FINAL_REPORT"
-
 echo "</pre></div>" >> "$FINAL_REPORT"
 
 
