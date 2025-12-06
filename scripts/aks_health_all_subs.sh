@@ -244,14 +244,23 @@ fi
 
 ############################################################
 # NODE CHANNEL TYPE (Node Security Channel Type)
-# Try new field first, then fallback top-level nodeOsUpgradeChannel
+# Try preferred path autoUpgradeProfile.nodeOsUpgradeChannel first (correct casing),
+# then fall back to nodeOSUpgradeChannel / top-level variants.
 ############################################################
 RAW_NODE=$(az aks show -g "$RG" -n "$CLUSTER" \
-           --query "autoUpgradeProfile.nodeOSUpgradeChannel" -o tsv 2>/dev/null)
+           --query "autoUpgradeProfile.nodeOsUpgradeChannel" -o tsv 2>/dev/null)
 
 if [[ -z "$RAW_NODE" || "$RAW_NODE" == "null" ]]; then
   RAW_NODE=$(az aks show -g "$RG" -n "$CLUSTER" \
+             --query "autoUpgradeProfile.nodeOSUpgradeChannel" -o tsv 2>/dev/null)
+fi
+if [[ -z "$RAW_NODE" || "$RAW_NODE" == "null" ]]; then
+  RAW_NODE=$(az aks show -g "$RG" -n "$CLUSTER" \
              --query "nodeOsUpgradeChannel" -o tsv 2>/dev/null)
+fi
+if [[ -z "$RAW_NODE" || "$RAW_NODE" == "null" ]]; then
+  RAW_NODE=$(az aks show -g "$RG" -n "$CLUSTER" \
+             --query "nodeOSUpgradeChannel" -o tsv 2>/dev/null)
 fi
 
 case "$RAW_NODE" in
